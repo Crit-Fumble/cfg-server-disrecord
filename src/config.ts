@@ -29,21 +29,28 @@ export interface GatewayConfig {
 
 export interface WorkerConfig {
   mode: 'worker'
-  /** Voice handoff from gateway. */
-  voiceToken: string
-  voiceSessionId: string
-  voiceEndpoint: string
-  guildId: string
-  channelId: string
-  userId: string
+  /** Gateway URL (SSE audio stream + control-plane callbacks). */
+  gatewayUrl: string
+  /** Per-session token issued by gateway at spawn time — auths the SSE subscription. */
+  sessionToken: string
+  /** Worker's ReSesh installation ID — keys transcripts + billing in core-server. */
   installationId: string
+  /** Owning user — used for billing attribution. */
+  userId: string
+  /** Discord guild (for logging / metadata only — gateway owns the voice connection). */
+  guildId: string
+  /** Discord voice channel id (logging / metadata). */
+  channelId: string
   /** Deepgram pricing route. */
   deepgramMode: 'platform' | 'byok' | 'disabled'
   /** Present only when deepgramMode='byok' (already decrypted by gateway). */
   deepgramKey?: string
-  /** core-server URL for transcript persistence + final billing tick. */
+  /** core-server URL for transcript persistence + billing tick. */
   coreServerUrl: string
+  /** Shared secret bearer for core-server callbacks. */
   coreServerAuthSecret: string
+  /** Container instance size — drives the bot_container CT rate. */
+  size: 'nano' | 'micro' | 'small'
   logLevel: string
 }
 
@@ -73,19 +80,23 @@ export function resolveConfig(mode: Mode): ResolvedConfig {
       logLevel: optionalEnv('LOG_LEVEL', 'info'),
     }
   }
+  const size = optionalEnv('RESESH_SIZE', 'micro') as WorkerConfig['size']
+  if (size !== 'nano' && size !== 'micro' && size !== 'small') {
+    throw new Error(`Invalid RESESH_SIZE: ${size}`)
+  }
   return {
     mode: 'worker',
-    voiceToken: requireEnv('RESESH_VOICE_TOKEN'),
-    voiceSessionId: requireEnv('RESESH_VOICE_SESSION_ID'),
-    voiceEndpoint: requireEnv('RESESH_VOICE_ENDPOINT'),
+    gatewayUrl: requireEnv('RESESH_GATEWAY_URL'),
+    sessionToken: requireEnv('RESESH_SESSION_TOKEN'),
+    installationId: requireEnv('RESESH_INSTALLATION_ID'),
+    userId: requireEnv('RESESH_USER_ID'),
     guildId: requireEnv('RESESH_GUILD_ID'),
     channelId: requireEnv('RESESH_CHANNEL_ID'),
-    userId: requireEnv('RESESH_USER_ID'),
-    installationId: requireEnv('RESESH_INSTALLATION_ID'),
     deepgramMode: requireEnv('RESESH_DEEPGRAM_MODE') as WorkerConfig['deepgramMode'],
     deepgramKey: process.env.RESESH_DEEPGRAM_KEY,
     coreServerUrl: requireEnv('CORE_SERVER_URL'),
     coreServerAuthSecret: requireEnv('CORE_SERVER_AUTH_SECRET'),
+    size,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
   }
 }

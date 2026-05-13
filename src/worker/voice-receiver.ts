@@ -1,124 +1,205 @@
 /**
- * VoiceReceiver — Discord voice channel subscriber.
+ * VoiceReceiver — SSE consumer for opus frames from the cfg-resesh gateway.
  *
- * Joins the target voice channel via @discordjs/voice (using our cross-process
- * gateway-bridge adapter), subscribes to each speaker's Opus stream, decodes
- * Opus → PCM, and feeds the PCM into the RecordingSession.
+ * Option B architecture (see docs/voice-transport-analysis.md): the gateway
+ * holds the Discord gateway connection and the per-guild voice WSS. It
+ * subscribes to each speaker's opus stream and forwards frames over SSE on:
  *
- * Boundary: this module owns the Discord side (voice WSS, opus decode); the
- * RecordingSession owns the Deepgram side. They communicate exclusively
- * through onSpeakerStart / onSpeakerData / onSpeakerEnd.
+ *   GET ${gatewayUrl}/internal/sessions/:installationId/audio
+ *
+ * SSE events:
+ *   event: speaker-start     data: {"speakerId": "..."}
+ *   event: speaker-data      data: {"speakerId": "...", "opus": "<base64>"}
+ *   event: speaker-end       data: {"speakerId": "..."}
+ *   event: session-end       data: {"reason": "..."}
+ *
+ * Worker decodes opus → PCM via @discordjs/opus and feeds RecordingSession.
+ * Auth: per-session token in the Authorization header — issued by gateway
+ * at session spawn time, passed to worker via env (RESESH_SESSION_TOKEN).
  */
 
-import {
-  joinVoiceChannel,
-  EndBehaviorType,
-  VoiceConnectionStatus,
-  entersState,
-  type VoiceConnection,
-  type AudioReceiveStream,
-  type DiscordGatewayAdapterCreator,
-} from '@discordjs/voice'
 import opus from '@discordjs/opus'
 import type { Logger } from '../logger.js'
 import type { RecordingSession } from './recording-session.js'
 import { OPUS_SAMPLE_RATE } from './recording-session.js'
 
 export interface VoiceReceiverParams {
-  guildId: string
-  channelId: string
-  adapterCreator: DiscordGatewayAdapterCreator
+  /** Gateway base URL. */
+  gatewayUrl: string
+  /** Per-session token issued by gateway at spawn time. */
+  sessionToken: string
+  /** ReSesh installation id — used in the audio SSE path. */
+  installationId: string
+  /** Where opus frames are decoded and fed. */
   session: RecordingSession
-  /** Connect timeout (ms) before failing the join. Default 15s. */
-  connectTimeoutMs?: number
   logger?: Logger
+  /** AbortSignal to tear down the SSE subscription. */
+  abortSignal?: AbortSignal
+}
+
+interface SpeakerStartEvent {
+  speakerId: string
+}
+interface SpeakerDataEvent {
+  speakerId: string
+  /** base64-encoded opus frame. */
+  opus: string
+}
+interface SpeakerEndEvent {
+  speakerId: string
+}
+interface SessionEndEvent {
+  reason: string
 }
 
 export class VoiceReceiver {
-  private connection: VoiceConnection | null = null
   private decoder: opus.OpusEncoder
-  private readonly subscribed = new Map<string, AudioReceiveStream>()
+  private aborter: AbortController
+  private donePromise: Promise<void> | null = null
 
   constructor(private readonly params: VoiceReceiverParams) {
-    // 48 kHz, mono — matches what Deepgram is configured for upstream
-    // (RecordingSession passes OPUS_SAMPLE_RATE + channels=1 to createDeepgramStream).
+    // 48 kHz, mono — matches Deepgram config in RecordingSession.
     this.decoder = new opus.OpusEncoder(OPUS_SAMPLE_RATE, 1)
-  }
-
-  async join(): Promise<void> {
-    const { guildId, channelId, adapterCreator, connectTimeoutMs, logger } = this.params
-
-    this.connection = joinVoiceChannel({
-      guildId,
-      channelId,
-      adapterCreator,
-      selfDeaf: false, // must hear to receive audio
-      selfMute: true, // bot doesn't speak
-    })
-
-    await entersState(this.connection, VoiceConnectionStatus.Ready, connectTimeoutMs ?? 15_000)
-    logger?.info({ guildId, channelId }, 'voice connection ready')
-
-    // Wire receiver: subscribe per speaker on start; tear down on end.
-    const receiver = this.connection.receiver
-    receiver.speaking.on('start', (userId) => {
-      void this.handleSpeakerStart(userId)
-    })
-    receiver.speaking.on('end', (userId) => {
-      void this.handleSpeakerEnd(userId)
-    })
-  }
-
-  private async handleSpeakerStart(userId: string): Promise<void> {
-    const { session, logger } = this.params
-    await session.onSpeakerStart(userId)
-
-    // Subscribe to this speaker's opus stream with Manual end behavior —
-    // we close it ourselves on speaking-end so a brief mid-utterance pause
-    // doesn't tear the subscription down.
-    if (this.subscribed.has(userId)) return
-    const stream = this.connection!.receiver.subscribe(userId, {
-      end: { behavior: EndBehaviorType.Manual },
-    })
-    this.subscribed.set(userId, stream)
-
-    stream.on('data', (opusFrame: Buffer) => {
-      try {
-        const pcm = this.decoder.decode(opusFrame)
-        session.onSpeakerData(userId, pcm)
-      } catch (err) {
-        // Opus decode failures happen on DAVE-encrypted channels and on the
-        // occasional malformed frame. Single failures are non-fatal; chronic
-        // failure is what the upstream DAVE canary tracks (Phase 0.5).
-        logger?.debug({ err, userId }, 'opus decode failed (single frame)')
-      }
-    })
-
-    stream.on('error', (err) => {
-      logger?.warn({ err, userId }, 'audio receive stream error')
-    })
-  }
-
-  private async handleSpeakerEnd(userId: string): Promise<void> {
-    const { session, logger } = this.params
-    await session.onSpeakerEnd(userId)
-
-    // Leave the subscription open across silence — same lesson as the
-    // Deepgram WS keepalive (cfg-core-server#63). Tearing down per-utterance
-    // costs reconnect latency on the next start without any real resource
-    // win. The subscription closes on voice connection destroy.
-    logger?.debug({ userId }, 'speaker end (subscription held)')
-  }
-
-  /** Tear down the voice connection + all subscriptions. */
-  destroy(): void {
-    for (const stream of this.subscribed.values()) {
-      stream.destroy()
+    this.aborter = new AbortController()
+    if (params.abortSignal) {
+      params.abortSignal.addEventListener('abort', () => this.aborter.abort())
     }
-    this.subscribed.clear()
-    if (this.connection) {
-      this.connection.destroy()
-      this.connection = null
+  }
+
+  /**
+   * Open the SSE subscription and start dispatching events to the session.
+   * Resolves when the server closes the stream (e.g. session-end event or
+   * abort signal). Throws if the initial connect fails.
+   */
+  async run(): Promise<void> {
+    const { gatewayUrl, sessionToken, installationId, logger } = this.params
+    const url = `${gatewayUrl.replace(/\/$/, '')}/internal/sessions/${encodeURIComponent(installationId)}/audio`
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        accept: 'text/event-stream',
+        authorization: `Bearer ${sessionToken}`,
+      },
+      signal: this.aborter.signal,
+    })
+    if (!res.ok) {
+      throw new Error(`SSE connect ${res.status}: ${await res.text().catch(() => '')}`)
+    }
+    if (!res.body) {
+      throw new Error('SSE body missing')
+    }
+    logger?.info({ installationId }, 'audio SSE connected')
+
+    this.donePromise = this.pump(res.body)
+    return this.donePromise
+  }
+
+  /** Abort the SSE subscription and wait for run() to settle. */
+  async destroy(): Promise<void> {
+    this.aborter.abort()
+    if (this.donePromise) {
+      await this.donePromise.catch(() => undefined)
+    }
+  }
+
+  /**
+   * Read the SSE byte stream, split into events, dispatch.
+   *
+   * SSE framing (per the WHATWG spec) is line-based with double-newline
+   * event terminators. We accumulate a UTF-8 buffer across chunks and
+   * split on \n\n.
+   */
+  private async pump(body: ReadableStream<Uint8Array>): Promise<void> {
+    const reader = body.getReader()
+    // Race read() against abort. When the abort fires we cancel the reader,
+    // which makes the pending read() resolve/reject and lets the loop exit
+    // even if the underlying stream isn't being torn down by an upstream
+    // fetch (e.g. unit-test stream).
+    const onAbort = () => {
+      reader.cancel().catch(() => undefined)
+    }
+    if (this.aborter.signal.aborted) onAbort()
+    else this.aborter.signal.addEventListener('abort', onAbort, { once: true })
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      while (true) {
+        if (this.aborter.signal.aborted) break
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        let idx: number
+        while ((idx = buffer.indexOf('\n\n')) !== -1) {
+          const rawEvent = buffer.slice(0, idx)
+          buffer = buffer.slice(idx + 2)
+          await this.dispatch(rawEvent)
+        }
+      }
+      if (buffer.trim().length > 0 && !this.aborter.signal.aborted) {
+        await this.dispatch(buffer)
+      }
+    } catch (err) {
+      if (this.aborter.signal.aborted) {
+        this.params.logger?.debug('SSE aborted')
+        return
+      }
+      throw err
+    } finally {
+      this.aborter.signal.removeEventListener('abort', onAbort)
+      reader.releaseLock()
+    }
+  }
+
+  /** Parse one SSE event block (`event: foo\ndata: {...}`) and dispatch. */
+  private async dispatch(rawEvent: string): Promise<void> {
+    let eventType: string | null = null
+    let data = ''
+    for (const line of rawEvent.split('\n')) {
+      if (line.startsWith('event:')) eventType = line.slice(6).trim()
+      else if (line.startsWith('data:')) {
+        // Multiple `data:` lines per event concatenate with newlines (SSE spec).
+        data += (data ? '\n' : '') + line.slice(5).trim()
+      }
+      // ignore comment lines (':') and id: / retry: for now
+    }
+    if (!eventType || !data) return
+
+    try {
+      switch (eventType) {
+        case 'speaker-start': {
+          const payload = JSON.parse(data) as SpeakerStartEvent
+          await this.params.session.onSpeakerStart(payload.speakerId)
+          break
+        }
+        case 'speaker-data': {
+          const payload = JSON.parse(data) as SpeakerDataEvent
+          const opusBuf = Buffer.from(payload.opus, 'base64')
+          try {
+            const pcm = this.decoder.decode(opusBuf)
+            this.params.session.onSpeakerData(payload.speakerId, pcm)
+          } catch (err) {
+            this.params.logger?.debug({ err, speakerId: payload.speakerId }, 'opus decode failed (single frame)')
+          }
+          break
+        }
+        case 'speaker-end': {
+          const payload = JSON.parse(data) as SpeakerEndEvent
+          await this.params.session.onSpeakerEnd(payload.speakerId)
+          break
+        }
+        case 'session-end': {
+          const payload = JSON.parse(data) as SessionEndEvent
+          this.params.logger?.info({ reason: payload.reason }, 'gateway signaled session-end')
+          this.aborter.abort()
+          break
+        }
+        default:
+          this.params.logger?.debug({ eventType }, 'ignoring unknown SSE event')
+      }
+    } catch (err) {
+      this.params.logger?.warn({ err, eventType }, 'failed to dispatch SSE event')
     }
   }
 }

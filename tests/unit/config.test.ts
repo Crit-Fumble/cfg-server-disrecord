@@ -11,13 +11,12 @@ const GATEWAY_ENV = {
 }
 
 const WORKER_ENV = {
-  RESESH_VOICE_TOKEN: 'vtok',
-  RESESH_VOICE_SESSION_ID: 'vsid',
-  RESESH_VOICE_ENDPOINT: 'wss://discord',
+  RESESH_GATEWAY_URL: 'http://gateway:4400',
+  RESESH_SESSION_TOKEN: 'sess-tok',
+  RESESH_INSTALLATION_ID: 'i1',
+  RESESH_USER_ID: 'u1',
   RESESH_GUILD_ID: 'g1',
   RESESH_CHANNEL_ID: 'c1',
-  RESESH_USER_ID: 'u1',
-  RESESH_INSTALLATION_ID: 'i1',
   RESESH_DEEPGRAM_MODE: 'platform',
   CORE_SERVER_URL: 'http://core:3001',
   CORE_SERVER_AUTH_SECRET: 'secret',
@@ -58,15 +57,17 @@ describe('resolveConfig — gateway mode', () => {
 })
 
 describe('resolveConfig — worker mode', () => {
-  it('returns a WorkerConfig from the voice handoff env', () => {
+  it('returns a WorkerConfig from the SSE handoff env', () => {
     setEnv(WORKER_ENV)
     const c = resolveConfig('worker')
     expect(c.mode).toBe('worker')
     if (c.mode !== 'worker') return
-    expect(c.voiceToken).toBe('vtok')
+    expect(c.gatewayUrl).toBe('http://gateway:4400')
+    expect(c.sessionToken).toBe('sess-tok')
     expect(c.installationId).toBe('i1')
     expect(c.deepgramMode).toBe('platform')
     expect(c.deepgramKey).toBeUndefined()
+    expect(c.size).toBe('micro')
   })
 
   it('passes through deepgramKey when mode is byok', () => {
@@ -77,8 +78,20 @@ describe('resolveConfig — worker mode', () => {
     expect(c.deepgramKey).toBe('dg-key')
   })
 
-  it('throws when a required voice handoff env var is missing', () => {
-    setEnv({ ...WORKER_ENV, RESESH_VOICE_TOKEN: '' })
-    expect(() => resolveConfig('worker')).toThrow(/RESESH_VOICE_TOKEN/)
+  it('throws when a required env var is missing', () => {
+    setEnv({ ...WORKER_ENV, RESESH_SESSION_TOKEN: '' })
+    expect(() => resolveConfig('worker')).toThrow(/RESESH_SESSION_TOKEN/)
+  })
+
+  it('honors RESESH_SIZE override', () => {
+    setEnv({ ...WORKER_ENV, RESESH_SIZE: 'small' })
+    const c = resolveConfig('worker')
+    if (c.mode !== 'worker') throw new Error('expected worker mode')
+    expect(c.size).toBe('small')
+  })
+
+  it('rejects invalid RESESH_SIZE', () => {
+    setEnv({ ...WORKER_ENV, RESESH_SIZE: 'jumbo' })
+    expect(() => resolveConfig('worker')).toThrow(/Invalid RESESH_SIZE/)
   })
 })

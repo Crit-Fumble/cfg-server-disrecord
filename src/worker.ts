@@ -1,112 +1,153 @@
 /**
- * Worker — per-session recording process.
+ * Worker — per-session recording process (Option B).
  *
- * Receives voice handoff tokens via env (set by the gateway when it spawned
- * this container). Wires VoiceReceiver → RecordingSession → core-server
- * transcript callbacks.
+ * Receives opus audio from gateway via SSE; runs RecordingSession (per-speaker
+ * Deepgram); POSTs finalized transcripts + billing ticks to core-server.
+ *
+ * Lifecycle:
+ *   1. fetch session policy from core-server (consent set, speaker names)
+ *   2. wire RecordingSession with policy + transcript callback
+ *   3. wire VoiceReceiver as SSE consumer
+ *   4. start the periodic billing tick
+ *   5. wait for SSE session-end OR SIGTERM
+ *   6. final billing tick + close session
  */
 
 import { logger as rootLogger } from './logger.js'
 import type { WorkerConfig } from './config.js'
 import { RecordingSession, type TranscriptFinalEvent } from './worker/recording-session.js'
 import { VoiceReceiver } from './worker/voice-receiver.js'
-import { createGatewayBridgeAdapterCreator } from './worker/gateway-bridge.js'
+import { CoreServerClient } from './worker/core-server-client.js'
 
 const logger = rootLogger.child({ module: 'worker' })
+
+/** Periodic CT billing tick (uptime). 15 min matches existing cfg-core-server cadence. */
+const BILLING_TICK_MINUTES = 15
+
+/**
+ * Local CT/min rates per size. Mirrors cfg-core-server's
+ * localContainerRates.vttSizes shape (we reuse those numbers because the
+ * resource shape is identical). When pricing config moves into shared, swap
+ * for a runtime lookup.
+ */
+const CT_PER_MIN_BY_SIZE: Record<WorkerConfig['size'], number> = {
+  nano: 6,
+  micro: 8,
+  small: 16,
+}
 
 export async function startWorker(config: WorkerConfig): Promise<void> {
   logger.info(
     {
+      installationId: config.installationId,
       guildId: config.guildId,
       channelId: config.channelId,
-      installationId: config.installationId,
+      size: config.size,
       deepgramMode: config.deepgramMode,
     },
     'starting cfg-resesh worker',
   )
 
-  // ── 1. RecordingSession — handles per-speaker Deepgram + consent gate
+  // ── 1. core-server client + session policy
+  const core = new CoreServerClient({
+    baseUrl: config.coreServerUrl,
+    authSecret: config.coreServerAuthSecret,
+    installationId: config.installationId,
+    logger: rootLogger.child({ module: 'core-server-client' }),
+  })
+  const policy = await core.fetchSessionPolicy()
+  logger.info(
+    { consentedCount: policy.consentedUserIds.length, namedCount: Object.keys(policy.speakerNames).length },
+    'session policy fetched',
+  )
+
+  // ── 2. RecordingSession
   const deepgramKey =
     config.deepgramMode === 'disabled' ? null : config.deepgramKey ?? null
-  // TODO(cfg-core-dev-tools#119): fetch real consent set + speaker name
-  // resolver from core-server. For now, accept all speakers verbatim and
-  // resolve via the Discord user ID.
+  const consent = new Set(policy.consentedUserIds)
   const session = new RecordingSession({
     deepgramApiKey: deepgramKey,
-    resolveSpeakerName: async (userId) => userId, // TODO: core-server API call
+    consentedUserIds: consent,
+    resolveSpeakerName: async (userId) => policy.speakerNames[userId] ?? userId,
     onTranscriptFinal: async (event: TranscriptFinalEvent) => {
-      // TODO: POST to core-server with auth: ${config.coreServerAuthSecret}
-      logger.info(
-        {
-          speakerId: event.speakerId,
-          isRedacted: event.isRedacted,
-          startSec: event.startSec.toFixed(2),
-          chars: event.transcript.length,
-        },
-        'transcript final (TODO: POST to core-server)',
-      )
+      await core.postTranscript({
+        speakerId: event.speakerId,
+        speakerName: event.speakerName,
+        transcript: event.transcript,
+        isRedacted: event.isRedacted,
+        startSec: event.startSec,
+        endSec: event.endSec,
+        words: event.words.length > 0 ? event.words : undefined,
+      })
     },
     logger: rootLogger.child({ module: 'recording-session' }),
   })
 
-  // ── 2. GatewayBridge adapter — cross-process voice events
-  // TODO: derive gatewayUrl from a worker env var (RESESH_GATEWAY_URL) once
-  // the gateway exposes /internal/voice/events + send-payload endpoints.
-  const adapterCreator = createGatewayBridgeAdapterCreator({
-    gatewayUrl: process.env.RESESH_GATEWAY_URL ?? 'http://cfg-resesh-gateway:4400',
-    authSecret: config.coreServerAuthSecret,
-    guildId: config.guildId,
-    seedVoiceServerUpdate: {
-      guild_id: config.guildId,
-      token: config.voiceToken,
-      endpoint: config.voiceEndpoint,
-    },
-    seedVoiceStateUpdate: {
-      guild_id: config.guildId,
-      channel_id: config.channelId,
-      user_id: config.userId,
-      session_id: config.voiceSessionId,
-      deaf: false,
-      mute: false,
-      self_deaf: false,
-      self_mute: true,
-      self_video: false,
-      suppress: false,
-      request_to_speak_timestamp: null,
-    },
-    logger: rootLogger.child({ module: 'gateway-bridge' }),
-  })
-
-  // ── 3. VoiceReceiver — joins the channel, subscribes to opus streams
+  // ── 3. VoiceReceiver (SSE consumer)
+  const receiverAborter = new AbortController()
   const receiver = new VoiceReceiver({
-    guildId: config.guildId,
-    channelId: config.channelId,
-    adapterCreator,
+    gatewayUrl: config.gatewayUrl,
+    sessionToken: config.sessionToken,
+    installationId: config.installationId,
     session,
+    abortSignal: receiverAborter.signal,
     logger: rootLogger.child({ module: 'voice-receiver' }),
   })
 
-  try {
-    await receiver.join()
-    logger.info('voice channel joined — recording active')
-  } catch (err) {
-    logger.fatal({ err }, 'failed to join voice channel — exiting')
-    process.exit(1)
-  }
+  // ── 4. periodic billing tick
+  const ctPerMin = CT_PER_MIN_BY_SIZE[config.size]
+  const tickIntervalMs = BILLING_TICK_MINUTES * 60_000
+  let lastTickAt = Date.now()
+  const tickTimer = setInterval(() => {
+    const now = Date.now()
+    const minutes = (now - lastTickAt) / 60_000
+    lastTickAt = now
+    void core.postBillingTick({
+      resourceType: 'bot_container',
+      minutes,
+      ctPerMinute: ctPerMin,
+      label: `Recording Server (${config.size}): ${minutes.toFixed(1)} min`,
+    })
+  }, tickIntervalMs)
+  tickTimer.unref()
 
-  // Wait for shutdown signal. Final billing tick + session close happen here.
-  await new Promise<void>((resolve) => {
+  // ── 5. run receiver until shutdown signal
+  let stopReason = 'unknown'
+  const stopPromise = new Promise<void>((resolve) => {
     const onSignal = (signal: string) => {
+      stopReason = signal
       logger.info({ signal }, 'shutdown signal received')
+      receiverAborter.abort()
       resolve()
     }
     process.on('SIGTERM', () => onSignal('SIGTERM'))
     process.on('SIGINT', () => onSignal('SIGINT'))
   })
 
-  logger.info('worker shutting down')
-  receiver.destroy()
+  try {
+    await Promise.race([
+      receiver.run().catch((err) => {
+        logger.error({ err }, 'voice receiver run failed')
+        stopReason = 'receiver-error'
+      }),
+      stopPromise,
+    ])
+  } finally {
+    clearInterval(tickTimer)
+  }
+
+  // ── 6. teardown + final tick
+  logger.info({ stopReason }, 'worker stopping')
+  await receiver.destroy()
   await session.stop()
-  // TODO(cfg-core-dev-tools#120): emit final billing tick to core-server.
+  const finalMinutes = (Date.now() - lastTickAt) / 60_000
+  if (finalMinutes > 0) {
+    await core.postBillingTick({
+      resourceType: 'bot_container',
+      minutes: finalMinutes,
+      ctPerMinute: ctPerMin,
+      label: `Recording Server (${config.size}): final ${finalMinutes.toFixed(1)} min`,
+    })
+  }
   logger.info('worker stopped cleanly')
 }
