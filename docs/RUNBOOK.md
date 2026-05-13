@@ -8,21 +8,38 @@ ahead of any production deploy to validate the wiring on local hardware.
 
 ### 1. Discord bot invite
 
-The cfg-resesh Discord application (client_id `1504164101553656028`) needs to
-be invited to the Dev Den guild with these scopes + intents:
+The cfg-resesh Discord application (client_id `1504164101553656028`) needs:
 
-- Scopes: `bot`, `applications.commands`
-- Intents: Guild Voice States, Guild Members, Guild Messages, Message Content
-- Permissions: Connect, Speak, Read Messages, Send Messages (in the test text
-  channel)
+**Privileged intents** — flip ON in the Developer Portal → Bot tab:
+- Server Members Intent (for `GuildMembers`)
+- Message Content Intent (for `MessageContent`)
+- Leave Presence Intent OFF (not used)
 
-Invite URL template:
+**Invite URL** (scopes: `bot`+`applications.commands`; permissions
+bitmask `36768768` = VIEW_CHANNEL + SEND_MESSAGES + READ_MESSAGE_HISTORY +
+CONNECT + SPEAK + USE_VAD):
 
 ```
-https://discord.com/oauth2/authorize?client_id=1504164101553656028&scope=bot+applications.commands&permissions=3145728
+https://discord.com/oauth2/authorize?client_id=1504164101553656028&scope=bot+applications.commands&permissions=36768768
 ```
+
+SPEAK is required even though the bot is listen-only — Discord won't fully
+establish the voice session without it. USE_VAD is required for natural
+voice recording (no push-to-talk).
 
 Create a voice channel in Dev Den called `cfg-resesh-test` for the demo.
+
+### 1a. Dev vs prod bot (Alpha policy)
+
+A single Discord bot token allows **one active gateway connection at a
+time**. Dev and prod gateways can't both be online with the same token —
+whichever connects second wins. Alpha policy:
+
+- **Single app for now.** Local dev (`npm run dev:gateway`) and prod share
+  client_id `1504164101553656028`. Only one runs at a time.
+- **Switch to two apps before the first non-Hob user starts a recording in
+  prod.** Create a `cfg-resesh-dev` app for Dev Den, keep the current app
+  for prod. Same code; the `RESESH_DISCORD_TOKEN` differs per env.
 
 ### 2. Local env
 
