@@ -1,0 +1,54 @@
+{
+  "name": "@crit-fumble/resesh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Crit-Fumble ReSesh — Discord voice recording + transcription server. Discord application 1504164101553656028.",
+  "license": "AGPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Crit-Fumble/cfg-resesh.git"
+  },
+  "homepage": "https://github.com/Crit-Fumble/cfg-resesh",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev:gateway": "tsx watch --clear-screen=false src/index.ts gateway",
+    "dev:worker": "tsx watch --clear-screen=false src/index.ts worker",
+    "build": "tsc && tsc-alias -f",
+    "start:gateway": "node dist/index.js gateway",
+    "start:worker": "node dist/index.js worker",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist",
+    "test": "jest --config jest.config.cjs",
+    "test:unit": "jest --config jest.config.cjs --testPathPatterns=tests/unit",
+    "prepare": "husky"
+  },
+  "dependencies": {
+    "@crit-fumble/auth": "^1.0.0",
+    "@crit-fumble/shared": "^1.0.0",
+    "@discordjs/opus": "^0.10.0",
+    "@discordjs/rest": "^2.6.1",
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.26.4",
+    "fastify": "^5.8.5",
+    "pino": "^10.1.0",
+    "prism-media": "^1.3.5",
+    "sodium-native": "^5.1.0",
+    "tweetnacl": "^1.0.3"
+  },
+  "devDependencies": {
+    "@swc/core": "^1.15.33",
+    "@swc/jest": "^0.2.37",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.5",
+    "husky": "^9.1.7",
+    "jest": "^29.7.0",
+    "rimraf": "^6.1.2",
+    "tsc-alias": "^1.8.16",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
