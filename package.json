@@ -12,8 +12,8 @@
   "homepage": "https://github.com/Crit-Fumble/cfg-resesh",
   "main": "./dist/index.js",
   "scripts": {
-    "dev:gateway": "tsx watch --clear-screen=false src/index.ts gateway",
-    "dev:worker": "tsx watch --clear-screen=false src/index.ts worker",
+    "dev:gateway": "tsx watch --env-file=.env --clear-screen=false src/index.ts gateway",
+    "dev:worker": "tsx watch --env-file=.env --clear-screen=false src/index.ts worker",
     "build": "tsc && tsc-alias -f",
     "start:gateway": "node dist/index.js gateway",
     "start:worker": "node dist/index.js worker",
