@@ -33,14 +33,21 @@ RESESH_DISCORD_TOKEN=...        # bot token from the Discord Developer Portal
 RESESH_DISCORD_PUBLIC_KEY=...   # public key from the same portal
 PORT=4400
 CORE_SERVER_URL=http://localhost:3001
-CORE_SERVER_AUTH_SECRET=...     # also set the same value in cfg-core-server's env as RESESH_AUTH_SECRET
+RESESH_GATEWAY_BEARER=...       # shared bearer for the core-server → gateway hop only
 DOCKER_SOCKET_PATH=/var/run/docker.sock
 RESESH_WORKER_IMAGE=cfg-resesh:local
 LOG_LEVEL=info
 ```
 
-The `CORE_SERVER_AUTH_SECRET` MUST match `RESESH_AUTH_SECRET` in
-cfg-core-server's env. That's the shared bearer used in both directions.
+`RESESH_GATEWAY_BEARER` MUST match `RESESH_GATEWAY_BEARER` in cfg-core-server's
+env. It guards the core-server → gateway control plane only (provisioning,
+stop, status).
+
+Worker → core-server auth is a **per-session JWT** minted by core-server at
+provisioning time and signed with `AUTH_SECRET` (the same key Auth.js uses
+for user sessions). The gateway forwards the JWT verbatim into the worker
+container as `CORE_SERVER_TOKEN` — gateway never holds the signing key, and
+each token is scoped to a single installation with an expiry.
 
 ### 3. GitHub Packages token (for docker build only)
 
@@ -108,20 +115,33 @@ cd workspaces/cfg-core-server
 npm run dev
 ```
 
+First mint a worker JWT in cfg-core-server (only core-server holds AUTH_SECRET).
+This is what the production provisioning controller does automatically; for
+direct-gateway curl testing you mint by hand:
+
+```sh
+# in another terminal — cfg-core-server's .env must be loaded
+cd workspaces/cfg-core-server
+export AUTH_SECRET=$(grep '^AUTH_SECRET=' .env | cut -d= -f2-)
+WORKER_TOKEN=$(npx tsx scripts/mint-resesh-token.ts test-inst-001 "<your discord user id>")
+echo "$WORKER_TOKEN"
+```
+
 Then POST a session against the gateway:
 
 ```sh
 curl -X POST http://localhost:4400/v1/sessions \
-  -H "authorization: Bearer $CORE_SERVER_AUTH_SECRET" \
+  -H "authorization: Bearer $RESESH_GATEWAY_BEARER" \
   -H "content-type: application/json" \
-  -d '{
-    "userId": "<your discord user id>",
-    "installationId": "test-inst-001",
-    "size": "micro",
-    "guildId": "1153767296867770378",
-    "channelId": "<voice channel id in Dev Den>",
-    "deepgramMode": "platform"
-  }'
+  -d "{
+    \"userId\": \"<your discord user id>\",
+    \"installationId\": \"test-inst-001\",
+    \"size\": \"micro\",
+    \"guildId\": \"1153767296867770378\",
+    \"channelId\": \"<voice channel id in Dev Den>\",
+    \"deepgramMode\": \"platform\",
+    \"workerToken\": \"$WORKER_TOKEN\"
+  }"
 ```
 
 Expected: 201 with `{ "sessionId": "test-inst-001", "containerId": "…", "hostPort": null }`.
@@ -142,7 +162,7 @@ Then:
 
 ```sh
 curl -X DELETE http://localhost:4400/v1/sessions/test-inst-001 \
-  -H "authorization: Bearer $CORE_SERVER_AUTH_SECRET"
+  -H "authorization: Bearer $RESESH_GATEWAY_BEARER"
 ```
 
 Expected: 204. The bot leaves voice; the worker container exits.
@@ -151,7 +171,7 @@ Expected: 204. The bot leaves voice; the worker container exits.
 
 ```sh
 curl http://localhost:4400/v1/sessions/test-inst-001/status \
-  -H "authorization: Bearer $CORE_SERVER_AUTH_SECRET"
+  -H "authorization: Bearer $RESESH_GATEWAY_BEARER"
 ```
 
 Returns the session record + uptime.
@@ -164,7 +184,7 @@ should return 409:
 ```sh
 # (first session still running from above)
 curl -X POST http://localhost:4400/v1/sessions \
-  -H "authorization: Bearer $CORE_SERVER_AUTH_SECRET" \
+  -H "authorization: Bearer $RESESH_GATEWAY_BEARER" \
   -H "content-type: application/json" \
   -d '{
     "userId": "u-other",

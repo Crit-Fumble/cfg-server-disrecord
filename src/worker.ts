@@ -51,7 +51,7 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
   // ── 1. core-server client + session policy
   const core = new CoreServerClient({
     baseUrl: config.coreServerUrl,
-    authSecret: config.coreServerAuthSecret,
+    token: config.coreServerToken,
     installationId: config.installationId,
     logger: rootLogger.child({ module: 'core-server-client' }),
   })

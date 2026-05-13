@@ -7,7 +7,7 @@ const GATEWAY_ENV = {
   RESESH_DISCORD_TOKEN: 'tok',
   RESESH_DISCORD_PUBLIC_KEY: 'pubkey',
   CORE_SERVER_URL: 'http://core:3001',
-  CORE_SERVER_AUTH_SECRET: 'secret',
+  RESESH_GATEWAY_BEARER: 'gw-bearer',
 }
 
 const WORKER_ENV = {
@@ -19,7 +19,7 @@ const WORKER_ENV = {
   RESESH_CHANNEL_ID: 'c1',
   RESESH_DEEPGRAM_MODE: 'platform',
   CORE_SERVER_URL: 'http://core:3001',
-  CORE_SERVER_AUTH_SECRET: 'secret',
+  CORE_SERVER_TOKEN: 'jwt.placeholder.token',
 }
 
 const ORIG = process.env

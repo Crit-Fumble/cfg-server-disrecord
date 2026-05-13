@@ -41,6 +41,13 @@ interface ProvisionBody {
   channelId: string
   deepgramMode: 'platform' | 'byok' | 'disabled'
   deepgramKey?: string
+  /**
+   * Per-session JWT minted by core-server (the AUTH_SECRET holder). Gateway
+   * forwards it verbatim to the worker container so the worker can call back
+   * into core-server for transcripts + billing + session-policy. Gateway has
+   * no signing authority and does not verify this token.
+   */
+  workerToken: string
 }
 
 interface ProvisionResponse {
@@ -86,6 +93,9 @@ export function registerRoutes(app: FastifyInstance, deps: GatewayRouteDeps): vo
     if (!body?.installationId || !body?.guildId || !body?.channelId || !body?.userId) {
       return reply.status(400).send({ error: 'missing required fields' })
     }
+    if (!body?.workerToken) {
+      return reply.status(400).send({ error: 'missing workerToken' })
+    }
 
     // Conflict check + reserve
     try {
@@ -111,6 +121,7 @@ export function registerRoutes(app: FastifyInstance, deps: GatewayRouteDeps): vo
         channelId: body.channelId,
         size: body.size ?? 'micro',
         sessionToken,
+        workerToken: body.workerToken,
         deepgramMode: body.deepgramMode,
         deepgramKey: body.deepgramKey,
       })

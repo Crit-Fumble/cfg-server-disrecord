@@ -13,7 +13,8 @@ export interface IntegrationEnv {
   discordToken: string
   deepgramApiKey: string
   coreServerUrl: string
-  coreServerAuthSecret: string
+  /** Shared bearer used by integration tests to call gateway directly. */
+  gatewayBearer: string
   guildId: string
   channelId: string
 }
@@ -23,7 +24,7 @@ export function getIntegrationEnv(): IntegrationEnv {
     'RESESH_DISCORD_TOKEN',
     'DEEPGRAM_API_KEY',
     'CORE_SERVER_URL',
-    'CORE_SERVER_AUTH_SECRET',
+    'RESESH_GATEWAY_BEARER',
     'RESESH_TEST_CHANNEL_ID',
   ] as const
   const missing = required.filter((k) => !process.env[k])
@@ -34,7 +35,7 @@ export function getIntegrationEnv(): IntegrationEnv {
     discordToken: process.env.RESESH_DISCORD_TOKEN!,
     deepgramApiKey: process.env.DEEPGRAM_API_KEY!,
     coreServerUrl: process.env.CORE_SERVER_URL!,
-    coreServerAuthSecret: process.env.CORE_SERVER_AUTH_SECRET!,
+    gatewayBearer: process.env.RESESH_GATEWAY_BEARER!,
     guildId: process.env.RESESH_TEST_GUILD_ID ?? DEV_DEN_GUILD_ID,
     channelId: process.env.RESESH_TEST_CHANNEL_ID!,
   }

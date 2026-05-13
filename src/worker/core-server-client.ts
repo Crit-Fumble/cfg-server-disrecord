@@ -1,7 +1,11 @@
 /**
  * HTTP client for worker → core-server callbacks.
  *
- * Three endpoints (all under /api/v1/, all auth via shared RESESH_AUTH_SECRET):
+ * Auth: per-session JWT (CORE_SERVER_TOKEN), minted by core-server at
+ * provisioning time. scope='resesh-worker' + installationId claim, signed
+ * with AUTH_SECRET. core-server rejects on scope/installation mismatch.
+ *
+ * Three endpoints (all under /api/v1/):
  *
  *   GET  /api/v1/recording/session-policy/:installationId
  *        Worker calls on session start to seed RecordingSession's consent set.
@@ -19,7 +23,7 @@ import type { Logger } from '../logger.js'
 
 export interface CoreServerClientParams {
   baseUrl: string
-  authSecret: string
+  token: string
   installationId: string
   logger?: Logger
 }
@@ -56,7 +60,7 @@ export class CoreServerClient {
 
   private headers(): Record<string, string> {
     return {
-      authorization: `Bearer ${this.params.authSecret}`,
+      authorization: `Bearer ${this.params.token}`,
       'content-type': 'application/json',
     }
   }

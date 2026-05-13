@@ -53,7 +53,6 @@ export async function startGateway(config: GatewayConfig): Promise<void> {
     dockerSocketPath: config.dockerSocketPath,
     workerImage: config.workerImageTag,
     gatewayUrl: `http://localhost:${config.port}`, // workers call back on loopback (same container network)
-    coreServerAuthSecret: config.coreServerAuthSecret,
     coreServerUrl: config.coreServerUrl,
     logger: rootLogger.child({ module: 'worker-spawn' }),
   })
@@ -66,7 +65,7 @@ export async function startGateway(config: GatewayConfig): Promise<void> {
     bus,
     voiceManager,
     spawner,
-    authSecret: config.coreServerAuthSecret,
+    authSecret: config.gatewayBearer,
     logger: rootLogger.child({ module: 'routes' }),
   })
 

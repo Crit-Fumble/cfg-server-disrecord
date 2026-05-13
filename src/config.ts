@@ -15,10 +15,14 @@ export interface GatewayConfig {
   discordPublicKey: string
   /** HTTP API port (core-server calls in on this). */
   port: number
-  /** core-server base URL for callbacks (billing, transcript persistence). */
+  /** core-server base URL (purely informational here — gateway no longer talks to core-server directly; workers do). */
   coreServerUrl: string
-  /** Shared secret for core-server ↔ resesh HTTP auth. */
-  coreServerAuthSecret: string
+  /**
+   * Shared bearer that core-server presents when calling the gateway's
+   * provisioning + stop + status endpoints. NOT given to worker containers;
+   * worker → core-server auth is a per-session JWT minted by core-server.
+   */
+  gatewayBearer: string
   /** Docker socket path for spawning worker containers. */
   dockerSocketPath: string
   /** Worker image tag (built from the same repo). */
@@ -31,7 +35,7 @@ export interface WorkerConfig {
   mode: 'worker'
   /** Gateway URL (SSE audio stream + control-plane callbacks). */
   gatewayUrl: string
-  /** Per-session token issued by gateway at spawn time — auths the SSE subscription. */
+  /** Per-session bearer issued by gateway at spawn time — auths the SSE subscription. */
   sessionToken: string
   /** Worker's ReSesh installation ID — keys transcripts + billing in core-server. */
   installationId: string
@@ -47,8 +51,12 @@ export interface WorkerConfig {
   deepgramKey?: string
   /** core-server URL for transcript persistence + billing tick. */
   coreServerUrl: string
-  /** Shared secret bearer for core-server callbacks. */
-  coreServerAuthSecret: string
+  /**
+   * Per-session JWT for worker → core-server callbacks. Minted by core-server
+   * at provisioning time, scope='resesh-worker' + installationId claim, signed
+   * with AUTH_SECRET. Worker can only act on its own installation until expiry.
+   */
+  coreServerToken: string
   /** Container instance size — drives the bot_container CT rate. */
   size: 'nano' | 'micro' | 'small'
   logLevel: string
@@ -74,7 +82,7 @@ export function resolveConfig(mode: Mode): ResolvedConfig {
       discordPublicKey: requireEnv('RESESH_DISCORD_PUBLIC_KEY'),
       port: Number(optionalEnv('PORT', '4400')),
       coreServerUrl: requireEnv('CORE_SERVER_URL'),
-      coreServerAuthSecret: requireEnv('CORE_SERVER_AUTH_SECRET'),
+      gatewayBearer: requireEnv('RESESH_GATEWAY_BEARER'),
       dockerSocketPath: optionalEnv('DOCKER_SOCKET_PATH', '/var/run/docker.sock'),
       workerImageTag: optionalEnv('RESESH_WORKER_IMAGE', 'cfg-resesh:latest'),
       logLevel: optionalEnv('LOG_LEVEL', 'info'),
@@ -95,7 +103,7 @@ export function resolveConfig(mode: Mode): ResolvedConfig {
     deepgramMode: requireEnv('RESESH_DEEPGRAM_MODE') as WorkerConfig['deepgramMode'],
     deepgramKey: process.env.RESESH_DEEPGRAM_KEY,
     coreServerUrl: requireEnv('CORE_SERVER_URL'),
-    coreServerAuthSecret: requireEnv('CORE_SERVER_AUTH_SECRET'),
+    coreServerToken: requireEnv('CORE_SERVER_TOKEN'),
     size,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
   }

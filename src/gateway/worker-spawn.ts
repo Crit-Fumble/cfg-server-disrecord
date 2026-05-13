@@ -18,7 +18,13 @@ export interface SpawnParams {
   guildId: string
   channelId: string
   size: 'nano' | 'micro' | 'small'
+  /** Per-session bearer for the worker → gateway SSE audio subscription. */
   sessionToken: string
+  /**
+   * Per-session JWT for worker → core-server callbacks. Minted by core-server
+   * (the AUTH_SECRET holder); gateway just relays it into the worker env.
+   */
+  workerToken: string
   deepgramMode: 'platform' | 'byok' | 'disabled'
   deepgramKey?: string
 }
@@ -35,8 +41,6 @@ export interface WorkerSpawnerParams {
   workerImage: string
   /** URL workers use to subscribe to the gateway audio SSE. */
   gatewayUrl: string
-  /** Shared secret bearer for worker → core-server. */
-  coreServerAuthSecret: string
   /** URL workers use to POST transcripts + billing back to core-server. */
   coreServerUrl: string
   /** Docker network for cross-container loopback (gateway ↔ worker). */
@@ -78,7 +82,7 @@ export class WorkerSpawner {
       `RESESH_DEEPGRAM_MODE=${opts.deepgramMode}`,
       `RESESH_SIZE=${opts.size}`,
       `CORE_SERVER_URL=${this.params.coreServerUrl}`,
-      `CORE_SERVER_AUTH_SECRET=${this.params.coreServerAuthSecret}`,
+      `CORE_SERVER_TOKEN=${opts.workerToken}`,
       'NODE_ENV=production',
     ]
     if (opts.deepgramMode === 'byok' && opts.deepgramKey) {

@@ -27,7 +27,7 @@ function mockFetch(impl: (url: string, init: any) => Promise<{ ok: boolean; stat
 function makeClient(): CoreServerClient {
   return new CoreServerClient({
     baseUrl: 'http://core:3001/',
-    authSecret: 'secret',
+    token: 'jwt.placeholder.token',
     installationId: 'inst-1',
   })
 }
@@ -43,7 +43,7 @@ describe('CoreServerClient.fetchSessionPolicy', () => {
     const [url, init] = fetchMock.mock.calls[0]
     expect(url).toBe('http://core:3001/api/v1/recording/session-policy/inst-1')
     expect(init.method).toBe('GET')
-    expect(init.headers.authorization).toBe('Bearer secret')
+    expect(init.headers.authorization).toBe('Bearer jwt.placeholder.token')
     expect(policy).toEqual({ consentedUserIds: ['u1', 'u2'], speakerNames: { u1: 'Alice' } })
   })
 

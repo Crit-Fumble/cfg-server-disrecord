@@ -108,6 +108,7 @@ describe('POST /v1/sessions — happy path', () => {
         userId: 'u-1',
         size: 'micro',
         deepgramMode: 'platform',
+        workerToken: 'jwt.placeholder.token',
       },
     })
     expect(res.statusCode).toBe(201)
@@ -116,9 +117,32 @@ describe('POST /v1/sessions — happy path', () => {
     expect(body.containerId).toBe('docker-abc')
     expect(voiceManager.join).toHaveBeenCalledWith('inst-1', 'g-1', 'c-1')
     expect(spawner.spawn).toHaveBeenCalledTimes(1)
+    expect(spawner.spawn).toHaveBeenCalledWith(
+      expect.objectContaining({ workerToken: 'jwt.placeholder.token' }),
+    )
     expect(store.has('inst-1')).toBe(true)
     const stored = store.get('inst-1')!
     expect(stored.sessionToken).toMatch(/^[0-9a-f]{64}$/) // 32-byte hex
+  })
+
+  it('rejects 400 when workerToken is missing', async () => {
+    const { app } = buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/sessions',
+      headers: { authorization: `Bearer ${AUTH}` },
+      payload: {
+        installationId: 'inst-1',
+        guildId: 'g-1',
+        channelId: 'c-1',
+        userId: 'u-1',
+        size: 'micro',
+        deepgramMode: 'platform',
+        // workerToken intentionally omitted
+      },
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toMatch(/workerToken/)
   })
 })
 
@@ -148,6 +172,7 @@ describe('POST /v1/sessions — guild conflict', () => {
         channelId: 'c-1',
         userId: 'u-1',
         deepgramMode: 'platform',
+        workerToken: 'jwt.placeholder.token',
       },
     })
     expect(res.statusCode).toBe(409)
@@ -173,6 +198,7 @@ describe('POST /v1/sessions — voice join failure releases reservation', () => 
         channelId: 'c-1',
         userId: 'u-1',
         deepgramMode: 'disabled',
+        workerToken: 'jwt.placeholder.token',
       },
     })
     expect(res.statusCode).toBe(502)

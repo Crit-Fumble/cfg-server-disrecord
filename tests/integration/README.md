@@ -19,7 +19,7 @@ Integration tests exercise real Discord + Deepgram against the
    export RESESH_DISCORD_TOKEN=...           # bot token for client_id 1504164101553656028
    export DEEPGRAM_API_KEY=...                # platform Deepgram key
    export CORE_SERVER_URL=http://localhost:3001
-   export CORE_SERVER_AUTH_SECRET=...
+   export RESESH_GATEWAY_BEARER=...           # shared bearer for the integration test → gateway control-plane hop
    export RESESH_TEST_GUILD_ID=1153767296867770378
    export RESESH_TEST_CHANNEL_ID=...          # voice channel id in Dev Den
    ```
