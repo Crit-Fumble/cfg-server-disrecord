@@ -5,12 +5,24 @@ Writing this up so we can settle it before building the gateway core.
 
 ## The constraint
 
-Discord enforces **one voice connection per bot identity per guild**. The cfg-resesh
-bot (client_id `1504164101553656028`) can be in at most one voice channel per
-guild at a time. The voice session is bound to the bot's gateway session, and the
-voice token issued by `VOICE_SERVER_UPDATE` is tied to that gateway connection —
-it can't be handed off to a separate process that runs its own gateway login as
-the same identity (Discord would refuse the second connection).
+Discord enforces **one voice connection per bot identity per guild** — but the
+bot CAN be in many guilds simultaneously, each with its own voice channel.
+Confirmed by Hob 2026-05-13: "I want multiple discord guilds/servers to be able
+to use the bot at the same time from different servers. If each user is using
+their own Recording Server, this should work."
+
+So the architectural shape that needs to hold:
+
+- One Discord gateway connection (held by the always-on gateway-router)
+- Many concurrent voice channel joins, one per active Recording Server, each
+  in a different guild
+- Per-installation worker containers, each handling one guild's recording
+- Worker talks to core-server directly for transcripts + billing; gateway
+  brokers Discord events to its worker
+
+What this rules out: a worker can't open its OWN voice WSS as the same bot
+identity (the voice session is tied to the gateway's gateway connection).
+Workers must consume voice events from the gateway.
 
 ## What this rules out
 
