@@ -26,7 +26,7 @@ Create a voice channel in Dev Den called `cfg-resesh-test` for the demo.
 
 ### 2. Local env
 
-Copy `.env.example` (TODO if missing) to `.env`. Fill in:
+Copy `.env.example` to `.env`. Fill in:
 
 ```sh
 RESESH_DISCORD_TOKEN=...        # bot token from the Discord Developer Portal
