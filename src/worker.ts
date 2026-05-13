@@ -1,8 +1,10 @@
 /**
- * Worker — per-session recording process (Option B).
+ * Worker — per-session recording process.
  *
- * Receives opus audio from gateway via SSE; runs RecordingSession (per-speaker
- * Deepgram); POSTs finalized transcripts + billing ticks to core-server.
+ * Receives opus audio from core-server via SSE
+ * (/api/internal/disrecord/sessions/:id/audio); runs RecordingSession
+ * (per-speaker Deepgram); POSTs finalized transcripts + billing ticks back
+ * to core-server. Container exits when the session ends.
  *
  * Lifecycle:
  *   1. fetch session policy from core-server (consent set, speaker names)

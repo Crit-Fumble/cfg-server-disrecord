@@ -193,7 +193,7 @@ export class VoiceReceiver {
         }
         case 'session-end': {
           const payload = JSON.parse(data) as SessionEndEvent
-          this.params.logger?.info({ reason: payload.reason }, 'gateway signaled session-end')
+          this.params.logger?.info({ reason: payload.reason }, 'core-server signaled session-end')
           this.aborter.abort()
           break
         }
