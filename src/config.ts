@@ -1,68 +1,42 @@
 /**
- * cfg-server-disrecord configuration — env-driven.
+ * cfg-server-disrecord worker configuration — env-driven.
  *
- * Mode-specific configs are validated only when running in that mode. The
- * gateway needs Discord credentials; the worker needs voice handoff tokens.
+ * The repo used to ship a gateway mode too; that work moved into core-server
+ * (services/disrecord/) when the standalone-gateway architecture was retired.
+ * Everything here is now the worker container's view: how to reach core-server
+ * for SSE opus + transcripts/billing callbacks, and per-session metadata
+ * injected by core-server's worker-spawner.
+ *
+ * No long-lived secrets — every credential the worker sees is per-session
+ * and dies with the container.
  */
 
-export type Mode = 'gateway' | 'worker'
-
-export interface GatewayConfig {
-  mode: 'gateway'
-  /** Discord bot token for client_id 1504164101553656028. */
-  discordToken: string
-  /** Public key for slash-command interaction signing. */
-  discordPublicKey: string
-  /** HTTP API port (core-server calls in on this). */
-  port: number
-  /** core-server base URL (purely informational here — gateway no longer talks to core-server directly; workers do). */
-  coreServerUrl: string
-  /**
-   * Shared bearer that core-server presents when calling the gateway's
-   * provisioning + stop + status endpoints. NOT given to worker containers;
-   * worker → core-server auth is a per-session JWT minted by core-server.
-   */
-  gatewayBearer: string
-  /** Docker socket path for spawning worker containers. */
-  dockerSocketPath: string
-  /** Worker image tag (built from the same repo). */
-  workerImageTag: string
-  /** Pino log level. */
-  logLevel: string
-}
-
 export interface WorkerConfig {
-  mode: 'worker'
-  /** Gateway URL (SSE audio stream + control-plane callbacks). */
-  gatewayUrl: string
-  /** Per-session bearer issued by gateway at spawn time — auths the SSE subscription. */
-  sessionToken: string
-  /** Worker's ReSesh installation ID — keys transcripts + billing in core-server. */
+  /** Worker's installation ID — recordingSession.id; keys all worker callbacks. */
   installationId: string
-  /** Owning user — used for billing attribution. */
+  /** Owning user — for logging only; billing attribution lives in core-server. */
   userId: string
-  /** Discord guild (for logging / metadata only — gateway owns the voice connection). */
+  /** Discord guild — logging / metadata. */
   guildId: string
-  /** Discord voice channel id (logging / metadata). */
+  /** Discord voice channel id — logging / metadata. */
   channelId: string
   /** Deepgram pricing route. */
   deepgramMode: 'platform' | 'byok' | 'disabled'
-  /** Present only when deepgramMode='byok' (already decrypted by gateway). */
+  /** Present only when deepgramMode='byok' — already-decrypted user key. */
   deepgramKey?: string
-  /** core-server URL for transcript persistence + billing tick. */
+  /** core-server base URL — used for both SSE opus subscription and callback POSTs. */
   coreServerUrl: string
   /**
-   * Per-session JWT for worker → core-server callbacks. Minted by core-server
-   * at provisioning time, scope='disrecord-worker' + installationId claim, signed
-   * with AUTH_SECRET. Worker can only act on its own installation until expiry.
+   * Per-session JWT minted by core-server at provisioning time.
+   * scope='disrecord-worker' + installationId claim + exp; signed with AUTH_SECRET.
+   * Gates the SSE subscription AND every callback. The worker holds no other
+   * credential.
    */
   coreServerToken: string
   /** Container instance size — drives the bot_container CT rate. */
   size: 'nano' | 'micro' | 'small'
   logLevel: string
 }
-
-export type ResolvedConfig = GatewayConfig | WorkerConfig
 
 function requireEnv(name: string): string {
   const v = process.env[name]
@@ -74,28 +48,12 @@ function optionalEnv(name: string, fallback: string): string {
   return process.env[name] ?? fallback
 }
 
-export function resolveConfig(mode: Mode): ResolvedConfig {
-  if (mode === 'gateway') {
-    return {
-      mode: 'gateway',
-      discordToken: requireEnv('DISRECORD_DISCORD_TOKEN'),
-      discordPublicKey: requireEnv('DISRECORD_DISCORD_PUBLIC_KEY'),
-      port: Number(optionalEnv('PORT', '4400')),
-      coreServerUrl: requireEnv('CORE_SERVER_URL'),
-      gatewayBearer: requireEnv('DISRECORD_GATEWAY_BEARER'),
-      dockerSocketPath: optionalEnv('DOCKER_SOCKET_PATH', '/var/run/docker.sock'),
-      workerImageTag: optionalEnv('DISRECORD_WORKER_IMAGE', 'cfg-server-disrecord:latest'),
-      logLevel: optionalEnv('LOG_LEVEL', 'info'),
-    }
-  }
+export function resolveConfig(): WorkerConfig {
   const size = optionalEnv('DISRECORD_SIZE', 'micro') as WorkerConfig['size']
   if (size !== 'nano' && size !== 'micro' && size !== 'small') {
     throw new Error(`Invalid DISRECORD_SIZE: ${size}`)
   }
   return {
-    mode: 'worker',
-    gatewayUrl: requireEnv('DISRECORD_GATEWAY_URL'),
-    sessionToken: requireEnv('DISRECORD_SESSION_TOKEN'),
     installationId: requireEnv('DISRECORD_INSTALLATION_ID'),
     userId: requireEnv('DISRECORD_USER_ID'),
     guildId: requireEnv('DISRECORD_GUILD_ID'),

@@ -1,65 +1,68 @@
-# cfg-resesh — Crit-Fumble Recording Server
+# cfg-server-disrecord — DisRecord worker container
 
-Discord voice recording + live transcription as a user-provisionable server.
+The per-session worker container for the DisRecord backend kind: connects
+to the audio SSE stream that cfg-core-server publishes for an active
+recording, decodes opus, runs per-speaker Deepgram, and POSTs transcripts
++ billing ticks back to core-server.
 
-## What it is
-
-A standalone Discord bot + service that records voice channels and routes audio
-to Deepgram for live transcription. Provisioned through Crit-Fumble's Server
-Manager and billed against the user's Crit-Coins (CT) pool.
-
-- **Discord app**: client_id `1504164101553656028`
+- **Image**: `cfg-server-disrecord:local` (dev) / registry path (prod)
 - **License**: AGPL-3.0-only
-- **Sizing**: even the smallest instance must support a 12-hour continuous recording session
+- **Discord app**: `1504164101553656028` (ReSesh — owned by cfg-core-server's
+  in-process gateway, not this container)
 
-## Architecture: gateway-router + worker containers
+## Where the orchestration lives
 
-Inspired by Craig.chat. One always-on gateway-router holds the single Discord
-gateway connection. When a user provisions a Recording Server, the gateway-
-router spawns a worker container that connects to Discord's voice WSS and does
-the actual recording. The worker exits when the session ends.
+The always-on Discord WebSocket + voice-channel join + opus → SSE fan-out
+all live inside **cfg-core-server** under `services/disrecord/`. This repo
+contains only the per-session container that runs inside Docker once
+core-server has accepted a recording.
 
-```
-┌──────────────────────────────┐         ┌────────────────────────┐
-│ cfg-resesh gateway-router    │         │ Worker container       │
-│ (always-on, 1× per cluster)  │ spawn → │ (per recording session)│
-│                              │         │                        │
-│ • Discord gateway WSS        │         │ • Discord voice WSS    │
-│ • Receives VOICE_STATE_UPDATE│         │ • Opus → PCM           │
-│ • Slash-command handler      │         │ • PCM → Deepgram WS    │
-│ • HTTP API for core-server   │         │ • Persist transcript   │
-└──────────────────────────────┘         └────────────────────────┘
-```
+Earlier revisions of this repo shipped a separate `gateway` Fastify service;
+that got merged into core-server when the cross-service HTTP-bridge proved
+to be more complexity than the per-kind isolation was worth. See
+core-server's `services/disrecord/index.ts` for the orchestration entry
+point.
 
-## Modes
+## Auth
 
-Single binary, two run modes selected by CMD arg:
+The worker holds zero long-lived credentials.
 
-```sh
-node dist/index.js gateway    # the always-on gateway-router
-node dist/index.js worker     # a per-session recording worker
-```
+`CORE_SERVER_TOKEN` is a per-session JWT minted by core-server at session
+start. It carries `scope='disrecord-worker'` + an `installationId` claim
+(= the `RecordingSession.id` for this session) and a short expiry. Same
+token gates:
+
+- The SSE opus subscription: `GET ${CORE_SERVER_URL}/api/internal/disrecord/sessions/:installationId/audio`
+- The callback POSTs: `POST /api/v1/recording/transcripts`, `POST /api/v1/billing/uptime-tick`, `GET /api/v1/recording/session-policy/:installationId`
+
+No bearer secrets, no shared keys.
 
 ## Charge model
 
 Per the platform's CT economy:
 
-- **Bot uptime**: CT/min by instance size. Recording itself is included.
+- **Bot uptime**: CT/min by instance size (`nano` / `micro` / `small`).
+  Recording itself is included.
 - **Live Transcription** (optional):
-  - **(A) Platform Deepgram key** → user pays extra CT for transcription minutes
-  - **(B) BYO Deepgram key** → no transcription surcharge
-
-## Status
-
-Phase 0 scaffold. Not yet deployed. Tracking: cfg-core-dev-tools#117 (epic).
+  - **Platform Deepgram key** → user pays extra CT for transcription minutes
+  - **BYO Deepgram key** → no transcription surcharge
 
 ## Development
 
 ```sh
 npm install
-npm run dev:gateway    # local dev with file-watching
+npm run dev   # tsx watch on src/index.ts worker
 npm test
 ```
 
+Locally the worker is normally not run by hand — core-server's
+worker-spawner starts a container per session. Run it manually only when
+debugging the SSE consumer or Deepgram integration against a running
+core-server; the `.env.example` shows the per-session env to fill in.
+
 Pre-push hook runs the full test suite (cfg-* convention). No `--no-verify` —
 fix the test instead.
+
+## Tracking
+
+cfg-core-dev-tools#117 (cfg-server-disrecord epic).

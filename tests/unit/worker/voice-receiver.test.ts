@@ -65,15 +65,15 @@ function fakeSession(): jest.Mocked<RecordingSession> {
 
 function makeReceiver(session: RecordingSession): VoiceReceiver {
   return new VoiceReceiver({
-    gatewayUrl: 'http://gw',
-    sessionToken: 'tok',
+    coreServerUrl: 'http://core:3001',
+    token: 'jwt.placeholder.token',
     installationId: 'inst-1',
     session,
   })
 }
 
 describe('VoiceReceiver — connect + auth', () => {
-  it('GETs /internal/sessions/:id/audio with bearer + event-stream accept', async () => {
+  it('GETs core-server /api/internal/disrecord/sessions/:id/audio with bearer + event-stream accept', async () => {
     const stream = streamFromChunks([''])
     const fetchMock = mockFetchOk(stream)
     const session = fakeSession()
@@ -81,8 +81,8 @@ describe('VoiceReceiver — connect + auth', () => {
     await r.run()
     expect(fetchMock).toHaveBeenCalledTimes(1)
     const [url, init] = fetchMock.mock.calls[0]
-    expect(url).toBe('http://gw/internal/sessions/inst-1/audio')
-    expect(init.headers.authorization).toBe('Bearer tok')
+    expect(url).toBe('http://core:3001/api/internal/disrecord/sessions/inst-1/audio')
+    expect(init.headers.authorization).toBe('Bearer jwt.placeholder.token')
     expect(init.headers.accept).toBe('text/event-stream')
   })
 

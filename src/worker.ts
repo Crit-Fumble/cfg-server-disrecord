@@ -86,8 +86,8 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
   // ── 3. VoiceReceiver (SSE consumer)
   const receiverAborter = new AbortController()
   const receiver = new VoiceReceiver({
-    gatewayUrl: config.gatewayUrl,
-    sessionToken: config.sessionToken,
+    coreServerUrl: config.coreServerUrl,
+    token: config.coreServerToken,
     installationId: config.installationId,
     session,
     abortSignal: receiverAborter.signal,

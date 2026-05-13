@@ -1,20 +1,22 @@
 # syntax=docker/dockerfile:1.7
 #
-# cfg-resesh — Discord voice recording service (gateway + worker)
+# cfg-server-disrecord — per-session DisRecord worker container.
 #
-# Two run modes selected by CMD: `gateway` (always-on) or `worker` (per session).
+# Image is spawned by cfg-core-server's worker-spawner (one container per
+# active recording session). Connects to core-server's SSE for opus audio,
+# decodes opus → PCM, runs per-speaker Deepgram, POSTs transcripts +
+# billing ticks back. Exits when the session ends.
 #
 # Private @crit-fumble/* packages from GitHub Packages (per .npmrc) need a
 # GitHub token at install time. Pass it as a BuildKit secret named `npmrc`:
 #
 #   docker build \
 #     --secret id=npmrc,src=<(echo "//npm.pkg.github.com/:_authToken=$(gh auth token)") \
-#     -t cfg-resesh:local .
+#     -t cfg-server-disrecord:local .
 #
-# Base: node:24-slim (Debian/glibc). Matches cfg-core-server — needed because
-# @discordjs/opus only ships x64-glibc prebuilds (no musl/alpine support).
-# sodium-native ships arm64/x64-glibc prebuilds. Apple-silicon devs may compile
-# @discordjs/opus from source via the toolchain in the deps stage.
+# Base: node:24-slim (Debian/glibc). Matches cfg-core-server — @discordjs/opus
+# only ships x64-glibc prebuilds (no musl/alpine support). Apple-silicon devs
+# may need to compile @discordjs/opus from source via the toolchain in deps.
 
 FROM node:24-slim AS base
 WORKDIR /app
@@ -39,7 +41,7 @@ RUN --mount=type=secret,id=npmrc \
     if [ -f .npmrc.public ]; then mv .npmrc.public .npmrc; fi
 
 # Rebuild native modules whose postinstall was skipped above.
-RUN npm rebuild @discordjs/opus sodium-native
+RUN npm rebuild @discordjs/opus
 
 # ── Stage 2: builder ─────────────────────────────────────────────────────────
 FROM deps AS builder
@@ -55,12 +57,11 @@ COPY --from=deps    /app/node_modules ./node_modules
 COPY --from=builder /app/dist          ./dist
 COPY --from=builder /app/package.json  ./package.json
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget -qO- http://127.0.0.1:${PORT:-4400}/health || exit 1
-
 ENV NODE_ENV=production
-EXPOSE 4400
 
-# Default to gateway mode; worker containers override CMD.
+# Worker accepts no inbound HTTP (everything is outbound to core-server),
+# so no EXPOSE / HEALTHCHECK is needed — health is implicit via the SSE
+# subscription staying open from core-server's side.
+
 ENTRYPOINT ["node", "dist/index.js"]
-CMD ["gateway"]
+CMD ["worker"]

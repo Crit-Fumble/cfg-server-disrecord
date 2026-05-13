@@ -1,11 +1,12 @@
 /**
- * VoiceReceiver — SSE consumer for opus frames from the cfg-server-disrecord gateway.
+ * VoiceReceiver — SSE consumer for opus frames from core-server.
  *
- * Option B architecture (see docs/voice-transport-analysis.md): the gateway
- * holds the Discord gateway connection and the per-guild voice WSS. It
- * subscribes to each speaker's opus stream and forwards frames over SSE on:
+ * Option B architecture (see core-server's services/disrecord/): the
+ * orchestration layer holds the ReSesh bot's Discord connection and the
+ * per-guild voice WSS. It subscribes to each speaker's opus stream and
+ * forwards frames over SSE on:
  *
- *   GET ${gatewayUrl}/internal/sessions/:installationId/audio
+ *   GET ${coreServerUrl}/api/internal/disrecord/sessions/:installationId/audio
  *
  * SSE events:
  *   event: speaker-start     data: {"speakerId": "..."}
@@ -14,8 +15,9 @@
  *   event: session-end       data: {"reason": "..."}
  *
  * Worker decodes opus → PCM via @discordjs/opus and feeds RecordingSession.
- * Auth: per-session token in the Authorization header — issued by gateway
- * at session spawn time, passed to worker via env (DISRECORD_SESSION_TOKEN).
+ * Auth: per-session JWT in the Authorization header (CORE_SERVER_TOKEN env).
+ * Same token gates both this SSE subscription and the worker's transcript /
+ * billing / session-policy callbacks — no separate sessionToken anymore.
  */
 
 import opus from '@discordjs/opus'
@@ -24,11 +26,11 @@ import type { RecordingSession } from './recording-session.js'
 import { OPUS_SAMPLE_RATE } from './recording-session.js'
 
 export interface VoiceReceiverParams {
-  /** Gateway base URL. */
-  gatewayUrl: string
-  /** Per-session token issued by gateway at spawn time. */
-  sessionToken: string
-  /** ReSesh installation id — used in the audio SSE path. */
+  /** core-server base URL — host the SSE endpoint lives on. */
+  coreServerUrl: string
+  /** Per-session JWT (CORE_SERVER_TOKEN). */
+  token: string
+  /** Installation id — used in the audio SSE path; matched against the JWT claim. */
   installationId: string
   /** Where opus frames are decoded and fed. */
   session: RecordingSession
@@ -72,14 +74,14 @@ export class VoiceReceiver {
    * abort signal). Throws if the initial connect fails.
    */
   async run(): Promise<void> {
-    const { gatewayUrl, sessionToken, installationId, logger } = this.params
-    const url = `${gatewayUrl.replace(/\/$/, '')}/internal/sessions/${encodeURIComponent(installationId)}/audio`
+    const { coreServerUrl, token, installationId, logger } = this.params
+    const url = `${coreServerUrl.replace(/\/$/, '')}/api/internal/disrecord/sessions/${encodeURIComponent(installationId)}/audio`
 
     const res = await fetch(url, {
       method: 'GET',
       headers: {
         accept: 'text/event-stream',
-        authorization: `Bearer ${sessionToken}`,
+        authorization: `Bearer ${token}`,
       },
       signal: this.aborter.signal,
     })
