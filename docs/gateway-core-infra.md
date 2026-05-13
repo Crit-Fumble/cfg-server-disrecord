@@ -20,8 +20,8 @@ All on the core droplet, sharing the existing private VPC interface.
 core droplet
 ├─ core-server (Fastify) — port 3001
 ├─ core-browser (Next.js)  — port 3000
-├─ cfg-resesh-gateway      — port 4400  (always on, ONE per cluster)
-└─ cfg-resesh-worker-*     — port 4401+ (ephemeral, one per active session)
+├─ cfg-server-disrecord-gateway      — port 4400  (always on, ONE per cluster)
+└─ cfg-server-disrecord-worker-*     — port 4401+ (ephemeral, one per active session)
 ```
 
 ### Phase A (cfg-core-dev-tools#23, already on the board)
@@ -31,8 +31,8 @@ VPC so audio bandwidth doesn't compete with the API/web tier.
 
 ```
 core droplet                      cfg-voice droplet
-├─ core-server                    ├─ cfg-resesh-gateway
-└─ core-browser                   └─ cfg-resesh-worker-*
+├─ core-server                    ├─ cfg-server-disrecord-gateway
+└─ core-browser                   └─ cfg-server-disrecord-worker-*
         │                                  │
         └──────── VPC private ─────────────┘
 ```
@@ -47,9 +47,9 @@ Three trust boundaries:
 | From → To | Mechanism | Why |
 |---|---|---|
 | browser → core-server | Auth.js v5 session JWT (existing) | User identity. Same as today. |
-| core-server → gateway | Shared secret bearer (`RESESH_AUTH_SECRET`) | Platform → platform. Both rotate via DO secret manager. |
+| core-server → gateway | Shared secret bearer (`DISRECORD_GATEWAY_BEARER`) | Platform → platform. Both rotate via DO secret manager. |
 | gateway ↔ worker | Same shared secret + per-session token | Per-session token bound to (installationId, sessionId). Worker accepts SSE only from gateway. |
-| worker → core-server | Same `RESESH_AUTH_SECRET` + an explicit `installationId` claim | Worker can ONLY write to its own installation's transcripts + billing. core-server enforces. |
+| worker → core-server | Same `DISRECORD_GATEWAY_BEARER` + an explicit `installationId` claim | Worker can ONLY write to its own installation's transcripts + billing. core-server enforces. |
 
 Workers do NOT speak to the browser. Anything the user sees about an
 in-flight recording comes through core-server (proxy pattern for views).
@@ -82,7 +82,7 @@ The Discord constraint is per-bot-per-guild. We enforce in the gateway:
    - Else: provision → set the map entry → return 201
 4. On worker exit (graceful or crash): clear the map entry
 
-The ReSesh adapter surfaces the 409 as a typed error (`ReseshGatewayConflict`)
+The ReSesh adapter surfaces the 409 as a typed error (`DisrecordGatewayError`)
 so the UI can render the right message: "Another Recording Server is active
 in this Discord server — stop it or wait for it to finish."
 
@@ -147,7 +147,7 @@ port to a thin internal-auth wrapper.
   fixed-and-recycle? Dynamic is simpler; fixed lets ops dashboards know
   what to point at. **Suggest dynamic, exposed via Docker's port mapping.**
 - **Worker base image registry**: same DO registry as cfg-core-server, or
-  separate? **Suggest same — `registry.digitalocean.com/crit-fumble/cfg-resesh:latest`.**
+  separate? **Suggest same — `registry.digitalocean.com/crit-fumble/cfg-server-disrecord:latest`.**
 - **Worker isolation**: own user namespace? Read-only filesystem except
   for the transcript scratch dir? **Suggest read-only root + tmpfs scratch.**
 - **Session-state durability across gateway restarts**: in-memory map +

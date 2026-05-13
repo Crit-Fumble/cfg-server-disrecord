@@ -2,11 +2,11 @@
  * Integration test — gateway mode boots and connects to Dev Den.
  *
  * Verifies the gateway can:
- *   1. Log into Discord as the cfg-resesh bot (client_id 1504164101553656028)
+ *   1. Log into Discord as the cfg-server-disrecord bot (client_id 1504164101553656028)
  *   2. See the Dev Den guild in its cache
  *   3. Serve /health on its HTTP port
  *
- * Skipped unless RESESH_INTEGRATION_TESTS_ENABLED=true.
+ * Skipped unless DISRECORD_INTEGRATION_TESTS_ENABLED=true.
  */
 
 import { describeIntegration, getIntegrationEnv, DEV_DEN_GUILD_ID } from './_helpers/setup.js'

@@ -1,5 +1,5 @@
 /**
- * cfg-resesh configuration — env-driven.
+ * cfg-server-disrecord configuration — env-driven.
  *
  * Mode-specific configs are validated only when running in that mode. The
  * gateway needs Discord credentials; the worker needs voice handoff tokens.
@@ -53,7 +53,7 @@ export interface WorkerConfig {
   coreServerUrl: string
   /**
    * Per-session JWT for worker → core-server callbacks. Minted by core-server
-   * at provisioning time, scope='resesh-worker' + installationId claim, signed
+   * at provisioning time, scope='disrecord-worker' + installationId claim, signed
    * with AUTH_SECRET. Worker can only act on its own installation until expiry.
    */
   coreServerToken: string
@@ -78,30 +78,30 @@ export function resolveConfig(mode: Mode): ResolvedConfig {
   if (mode === 'gateway') {
     return {
       mode: 'gateway',
-      discordToken: requireEnv('RESESH_DISCORD_TOKEN'),
-      discordPublicKey: requireEnv('RESESH_DISCORD_PUBLIC_KEY'),
+      discordToken: requireEnv('DISRECORD_DISCORD_TOKEN'),
+      discordPublicKey: requireEnv('DISRECORD_DISCORD_PUBLIC_KEY'),
       port: Number(optionalEnv('PORT', '4400')),
       coreServerUrl: requireEnv('CORE_SERVER_URL'),
-      gatewayBearer: requireEnv('RESESH_GATEWAY_BEARER'),
+      gatewayBearer: requireEnv('DISRECORD_GATEWAY_BEARER'),
       dockerSocketPath: optionalEnv('DOCKER_SOCKET_PATH', '/var/run/docker.sock'),
-      workerImageTag: optionalEnv('RESESH_WORKER_IMAGE', 'cfg-resesh:latest'),
+      workerImageTag: optionalEnv('DISRECORD_WORKER_IMAGE', 'cfg-server-disrecord:latest'),
       logLevel: optionalEnv('LOG_LEVEL', 'info'),
     }
   }
-  const size = optionalEnv('RESESH_SIZE', 'micro') as WorkerConfig['size']
+  const size = optionalEnv('DISRECORD_SIZE', 'micro') as WorkerConfig['size']
   if (size !== 'nano' && size !== 'micro' && size !== 'small') {
-    throw new Error(`Invalid RESESH_SIZE: ${size}`)
+    throw new Error(`Invalid DISRECORD_SIZE: ${size}`)
   }
   return {
     mode: 'worker',
-    gatewayUrl: requireEnv('RESESH_GATEWAY_URL'),
-    sessionToken: requireEnv('RESESH_SESSION_TOKEN'),
-    installationId: requireEnv('RESESH_INSTALLATION_ID'),
-    userId: requireEnv('RESESH_USER_ID'),
-    guildId: requireEnv('RESESH_GUILD_ID'),
-    channelId: requireEnv('RESESH_CHANNEL_ID'),
-    deepgramMode: requireEnv('RESESH_DEEPGRAM_MODE') as WorkerConfig['deepgramMode'],
-    deepgramKey: process.env.RESESH_DEEPGRAM_KEY,
+    gatewayUrl: requireEnv('DISRECORD_GATEWAY_URL'),
+    sessionToken: requireEnv('DISRECORD_SESSION_TOKEN'),
+    installationId: requireEnv('DISRECORD_INSTALLATION_ID'),
+    userId: requireEnv('DISRECORD_USER_ID'),
+    guildId: requireEnv('DISRECORD_GUILD_ID'),
+    channelId: requireEnv('DISRECORD_CHANNEL_ID'),
+    deepgramMode: requireEnv('DISRECORD_DEEPGRAM_MODE') as WorkerConfig['deepgramMode'],
+    deepgramKey: process.env.DISRECORD_DEEPGRAM_KEY,
     coreServerUrl: requireEnv('CORE_SERVER_URL'),
     coreServerToken: requireEnv('CORE_SERVER_TOKEN'),
     size,

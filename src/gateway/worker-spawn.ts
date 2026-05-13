@@ -1,9 +1,9 @@
 /**
  * WorkerSpawner — dockerode wrapper for creating, starting, and stopping
- * cfg-resesh-worker containers.
+ * cfg-server-disrecord-worker containers.
  *
- * Container naming: cfg-resesh-worker-<installationId>
- * Image: configured per gateway (RESESH_WORKER_IMAGE)
+ * Container naming: cfg-server-disrecord-worker-<installationId>
+ * Image: configured per gateway (DISRECORD_WORKER_IMAGE)
  * Network: same as gateway, so loopback HTTP works for the SSE callback
  * Port: dynamic (HostPort: 0); not exposed publicly — gateway-to-worker
  *   traffic is one-way (worker POSTs to core-server, doesn't accept inbound).
@@ -49,7 +49,7 @@ export interface WorkerSpawnerParams {
 }
 
 /** Prefix every worker container with this so we can reconcile state from Docker. */
-const WORKER_NAME_PREFIX = 'cfg-resesh-worker-'
+const WORKER_NAME_PREFIX = 'cfg-server-disrecord-worker-'
 
 /** Container resource limits per size. CPU is in nanos; memory in bytes. */
 const RESOURCE_LIMITS: Record<SpawnParams['size'], { CpuShares: number; Memory: number }> = {
@@ -73,20 +73,20 @@ export class WorkerSpawner {
     // in core-server (worker doesn't need it for platform mode; transcripts
     // route through core-server which holds the key).
     const env: string[] = [
-      `RESESH_GATEWAY_URL=${this.params.gatewayUrl}`,
-      `RESESH_SESSION_TOKEN=${opts.sessionToken}`,
-      `RESESH_INSTALLATION_ID=${opts.installationId}`,
-      `RESESH_USER_ID=${opts.userId}`,
-      `RESESH_GUILD_ID=${opts.guildId}`,
-      `RESESH_CHANNEL_ID=${opts.channelId}`,
-      `RESESH_DEEPGRAM_MODE=${opts.deepgramMode}`,
-      `RESESH_SIZE=${opts.size}`,
+      `DISRECORD_GATEWAY_URL=${this.params.gatewayUrl}`,
+      `DISRECORD_SESSION_TOKEN=${opts.sessionToken}`,
+      `DISRECORD_INSTALLATION_ID=${opts.installationId}`,
+      `DISRECORD_USER_ID=${opts.userId}`,
+      `DISRECORD_GUILD_ID=${opts.guildId}`,
+      `DISRECORD_CHANNEL_ID=${opts.channelId}`,
+      `DISRECORD_DEEPGRAM_MODE=${opts.deepgramMode}`,
+      `DISRECORD_SIZE=${opts.size}`,
       `CORE_SERVER_URL=${this.params.coreServerUrl}`,
       `CORE_SERVER_TOKEN=${opts.workerToken}`,
       'NODE_ENV=production',
     ]
     if (opts.deepgramMode === 'byok' && opts.deepgramKey) {
-      env.push(`RESESH_DEEPGRAM_KEY=${opts.deepgramKey}`)
+      env.push(`DISRECORD_DEEPGRAM_KEY=${opts.deepgramKey}`)
     }
 
     const limits = RESOURCE_LIMITS[opts.size]
@@ -106,7 +106,7 @@ export class WorkerSpawner {
         AutoRemove: true,
       },
       Labels: {
-        'cfg.kind': 'resesh-worker',
+        'cfg.kind': 'disrecord-worker',
         'cfg.installationId': opts.installationId,
         'cfg.guildId': opts.guildId,
       },
@@ -149,7 +149,7 @@ export class WorkerSpawner {
   async reconcile(): Promise<Array<{ installationId: string; containerId: string; guildId: string }>> {
     const containers = await this.docker.listContainers({
       all: false,
-      filters: { label: ['cfg.kind=resesh-worker'] },
+      filters: { label: ['cfg.kind=disrecord-worker'] },
     })
     return containers.map((c) => ({
       installationId: c.Labels['cfg.installationId'] ?? '',

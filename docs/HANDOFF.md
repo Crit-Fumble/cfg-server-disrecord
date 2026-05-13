@@ -1,4 +1,4 @@
-# Handoff — cfg-resesh end-to-end recording, 2026-05-13
+# Handoff — cfg-server-disrecord end-to-end recording, 2026-05-13
 
 Self-contained briefing for the next session to pick up cleanly. Read this
 top-to-bottom; everything you need to continue is here or linked.
@@ -40,7 +40,7 @@ d8c7ede  config(prod): backfill production.json from OLD monorepo values
 bba2bd1  config(prod): backfill production.json + add ReSesh app icon
 ```
 
-### cfg-resesh (10 commits, NO REMOTE YET)
+### cfg-server-disrecord (10 commits, NO REMOTE YET)
 
 ```
 5507e45  chore(docker): rewrite Dockerfile + add RUNBOOK
@@ -52,11 +52,11 @@ af2cf4a  feat(gateway): real gateway core — voice join, worker spawn, audio SS
 a106a88  feat(voice): gateway-bridge adapter scaffold + integration test suite
 a088320  feat(worker): port RecordingSession from cfg-core-server transcription.ts
 e13686e  feat(deepgram): port Deepgram streaming client from cfg-core-server
-5eca876  chore(repo): scaffold cfg-resesh — Discord voice recording + transcription server
+5eca876  chore(repo): scaffold cfg-server-disrecord — Discord voice recording + transcription server
 ```
 
-The cfg-resesh repo doesn't have a GitHub remote yet. Whoever picks this up
-needs to run `gh repo create Crit-Fumble/cfg-resesh --public --source=. --push`
+The cfg-server-disrecord repo doesn't have a GitHub remote yet. Whoever picks this up
+needs to run `gh repo create Crit-Fumble/cfg-server-disrecord --public --source=. --push`
 when ready. Until then, the commits live locally only.
 
 ## Architecture decisions locked
@@ -70,7 +70,7 @@ when ready. Until then, the commits live locally only.
   table). Phase 1 → Redis. See `docs/gateway-core-infra.md`.
 - **One Recording Server per guild at any time**: enforced by gateway
   via 409 Conflict; matches Discord's underlying per-bot-per-guild rule.
-- **Bot identity**: client_id `1504164101553656028` (the cfg-resesh Discord
+- **Bot identity**: client_id `1504164101553656028` (the cfg-server-disrecord Discord
   application). Created by Hob. NOT yet invited to Dev Den.
 - **User-facing noun**: "Recording Server" (per Hob, 2026-05-13).
 - **Test guild**: Dev Den, guild id `1153767296867770378`.
@@ -80,10 +80,10 @@ when ready. Until then, the commits live locally only.
 | Repo | Unit suites | Tests |
 |---|---|---|
 | cfg-core-server | 219 (was 213) | 3273 (was 3237) |
-| cfg-resesh | 9 | 99 |
-| cfg-resesh integration | 5 stubs | skipped without `RESESH_INTEGRATION_TESTS_ENABLED=true` |
+| cfg-server-disrecord | 9 | 99 |
+| cfg-server-disrecord integration | 5 stubs | skipped without `DISRECORD_INTEGRATION_TESTS_ENABLED=true` |
 
-cfg-resesh tests cover: config, Deepgram client (verbatim port + URL builder
+cfg-server-disrecord tests cover: config, Deepgram client (verbatim port + URL builder
 + keepalive cleanup), RecordingSession (consent gate, WS lifecycle, mid-
 session flip, transcripts), worker voice-receiver SSE protocol, core-server-
 client, gateway session-store, gateway opus-bus, gateway routes with mocked
@@ -108,7 +108,7 @@ resesh-routes (transcripts POST + billing tick + session-policy).
 
 ## What's NOT yet done (Friday work)
 
-1. **Run the runbook** at `cfg-resesh/docs/RUNBOOK.md` against the Dev Den.
+1. **Run the runbook** at `cfg-server-disrecord/docs/RUNBOOK.md` against the Dev Den.
    This is the verification that everything actually works end-to-end. Hob
    has to do this — needs the Discord token, bot invite, voice channel
    presence.
@@ -116,7 +116,7 @@ resesh-routes (transcripts POST + billing tick + session-policy).
 2. **Push to origin**. None of today's commits are pushed. Per
    `feedback_no_default_origin_push`, the human pushes; agents commit only.
 
-3. **Build + push cfg-resesh container image**. The Dockerfile is correct
+3. **Build + push cfg-server-disrecord container image**. The Dockerfile is correct
    but `docker build` requires a GitHub token with `read:packages` scope.
    Default `gh auth token` typically lacks this — run:
    ```sh
@@ -124,38 +124,38 @@ resesh-routes (transcripts POST + billing tick + session-policy).
    ```
    Then:
    ```sh
-   cd workspaces/cfg-resesh
+   cd workspaces/cfg-server-disrecord
    DOCKER_BUILDKIT=1 docker build \
      --secret id=npmrc,src=<(echo "//npm.pkg.github.com/:_authToken=$(gh auth token)") \
-     -t registry.digitalocean.com/crit-fumble/cfg-resesh:latest .
-   docker push registry.digitalocean.com/crit-fumble/cfg-resesh:latest
+     -t registry.digitalocean.com/crit-fumble/cfg-server-disrecord:latest .
+   docker push registry.digitalocean.com/crit-fumble/cfg-server-disrecord:latest
    ```
 
-4. **Wire cfg-resesh-gateway into the prod deploy workflow**. Production
+4. **Wire cfg-server-disrecord-gateway into the prod deploy workflow**. Production
    docker-compose / deploy-production.yml needs a new service entry for
    the gateway container. Sample shape:
    ```yaml
-   cfg-resesh-gateway:
-     image: registry.digitalocean.com/crit-fumble/cfg-resesh:latest
+   cfg-server-disrecord-gateway:
+     image: registry.digitalocean.com/crit-fumble/cfg-server-disrecord:latest
      command: gateway
      environment:
-       RESESH_DISCORD_TOKEN: ${RESESH_DISCORD_TOKEN}
-       RESESH_DISCORD_PUBLIC_KEY: ${RESESH_DISCORD_PUBLIC_KEY}
+       DISRECORD_DISCORD_TOKEN: ${DISRECORD_DISCORD_TOKEN}
+       DISRECORD_DISCORD_PUBLIC_KEY: ${DISRECORD_DISCORD_PUBLIC_KEY}
        CORE_SERVER_URL: http://core-server:3001
-       CORE_SERVER_AUTH_SECRET: ${RESESH_AUTH_SECRET}
+       CORE_SERVER_AUTH_SECRET: ${DISRECORD_GATEWAY_BEARER}
        PORT: 4400
        DOCKER_SOCKET_PATH: /var/run/docker.sock
-       RESESH_WORKER_IMAGE: registry.digitalocean.com/crit-fumble/cfg-resesh:latest
+       DISRECORD_WORKER_IMAGE: registry.digitalocean.com/crit-fumble/cfg-server-disrecord:latest
      volumes:
        - /var/run/docker.sock:/var/run/docker.sock  # workers spawned via dockerode
      networks:
        - crit-fumble-network
    ```
-   core-server also needs `RESESH_AUTH_SECRET` set in its env so the worker
+   core-server also needs `DISRECORD_GATEWAY_BEARER` set in its env so the worker
    callback routes can verify the shared bearer.
 
 5. **Tag releases**: cfg-core-server v1.2.0, cfg-core-browser v1.1.4,
-   cfg-resesh v0.1.0.
+   cfg-server-disrecord v0.1.0.
 
 6. **Integration tests**: 5 suites in `tests/integration/` are scaffolds.
    Fleshing them out would mean: spinning up a real gateway + worker against
@@ -170,15 +170,15 @@ If you're picking this up, read these in order:
 
 1. `/Users/hobdaytrain/.claude/plans/we-just-refactored-all-rustling-teacup.md`
    — the locked plan (approved Wed PM).
-2. `cfg-resesh/docs/RUNBOOK.md` — exact commands to bring up cfg-resesh
+2. `cfg-server-disrecord/docs/RUNBOOK.md` — exact commands to bring up cfg-server-disrecord
    locally and exercise it against Dev Den.
-3. `cfg-resesh/docs/gateway-core-infra.md` — architecture map (Phase 0
+3. `cfg-server-disrecord/docs/gateway-core-infra.md` — architecture map (Phase 0
    topology, hot/warm/cold paths, proxy vs direct pattern).
-4. `cfg-resesh/docs/voice-transport-analysis.md` — why Option B (Discord
+4. `cfg-server-disrecord/docs/voice-transport-analysis.md` — why Option B (Discord
    protocol constraint analysis).
-5. `cfg-resesh/docs/ARCHITECTURE.md` — front-door explainer for the repo.
+5. `cfg-server-disrecord/docs/ARCHITECTURE.md` — front-door explainer for the repo.
 
-Key implementation files (cfg-resesh, in order of "where to start"):
+Key implementation files (cfg-server-disrecord, in order of "where to start"):
 
 - `src/gateway.ts` — gateway entrypoint, wires everything together
 - `src/gateway/routes.ts` — POST /v1/sessions handler (real impl)
@@ -225,8 +225,8 @@ These are NOT blockers for the Friday demo but are worth noting:
 ## How the next session should restart
 
 ```
-"I'm picking up from the cfg-resesh end-to-end recording handoff.
-Read cfg-resesh/docs/HANDOFF.md, then continue from the
+"I'm picking up from the cfg-server-disrecord end-to-end recording handoff.
+Read cfg-server-disrecord/docs/HANDOFF.md, then continue from the
 'What's NOT yet done (Friday work)' list. I'll drive verification
 against Dev Den; you handle commits + tests + helper docs as needed."
 ```

@@ -4,7 +4,7 @@
 import pino from 'pino'
 
 const level = process.env.LOG_LEVEL ?? 'info'
-const mode = (process.env.RESESH_MODE_HINT ?? '?').slice(0, 16)
+const mode = (process.env.DISRECORD_MODE_HINT ?? '?').slice(0, 16)
 
 export const logger = pino({
   level,

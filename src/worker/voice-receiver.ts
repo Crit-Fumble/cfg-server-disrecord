@@ -1,5 +1,5 @@
 /**
- * VoiceReceiver — SSE consumer for opus frames from the cfg-resesh gateway.
+ * VoiceReceiver — SSE consumer for opus frames from the cfg-server-disrecord gateway.
  *
  * Option B architecture (see docs/voice-transport-analysis.md): the gateway
  * holds the Discord gateway connection and the per-guild voice WSS. It
@@ -15,7 +15,7 @@
  *
  * Worker decodes opus → PCM via @discordjs/opus and feeds RecordingSession.
  * Auth: per-session token in the Authorization header — issued by gateway
- * at session spawn time, passed to worker via env (RESESH_SESSION_TOKEN).
+ * at session spawn time, passed to worker via env (DISRECORD_SESSION_TOKEN).
  */
 
 import opus from '@discordjs/opus'

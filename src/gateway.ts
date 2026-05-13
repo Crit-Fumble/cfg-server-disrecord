@@ -25,7 +25,7 @@ import { registerRoutes } from './gateway/routes.js'
 const logger = rootLogger.child({ module: 'gateway' })
 
 export async function startGateway(config: GatewayConfig): Promise<void> {
-  logger.info({ port: config.port }, 'starting cfg-resesh gateway')
+  logger.info({ port: config.port }, 'starting cfg-server-disrecord gateway')
 
   // 1. Wire dependencies
   const client = new Client({

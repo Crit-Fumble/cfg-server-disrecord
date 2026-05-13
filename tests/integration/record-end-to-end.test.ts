@@ -10,7 +10,7 @@
  *   5. Verify: transcripts arrived at core-server, billing tick emitted,
  *      worker exited cleanly
  *
- * Skipped unless RESESH_INTEGRATION_TESTS_ENABLED=true.
+ * Skipped unless DISRECORD_INTEGRATION_TESTS_ENABLED=true.
  */
 
 import { describeIntegration } from './_helpers/setup.js'

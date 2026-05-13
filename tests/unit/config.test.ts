@@ -4,20 +4,20 @@
 import { resolveConfig } from '../../src/config.js'
 
 const GATEWAY_ENV = {
-  RESESH_DISCORD_TOKEN: 'tok',
-  RESESH_DISCORD_PUBLIC_KEY: 'pubkey',
+  DISRECORD_DISCORD_TOKEN: 'tok',
+  DISRECORD_DISCORD_PUBLIC_KEY: 'pubkey',
   CORE_SERVER_URL: 'http://core:3001',
-  RESESH_GATEWAY_BEARER: 'gw-bearer',
+  DISRECORD_GATEWAY_BEARER: 'gw-bearer',
 }
 
 const WORKER_ENV = {
-  RESESH_GATEWAY_URL: 'http://gateway:4400',
-  RESESH_SESSION_TOKEN: 'sess-tok',
-  RESESH_INSTALLATION_ID: 'i1',
-  RESESH_USER_ID: 'u1',
-  RESESH_GUILD_ID: 'g1',
-  RESESH_CHANNEL_ID: 'c1',
-  RESESH_DEEPGRAM_MODE: 'platform',
+  DISRECORD_GATEWAY_URL: 'http://gateway:4400',
+  DISRECORD_SESSION_TOKEN: 'sess-tok',
+  DISRECORD_INSTALLATION_ID: 'i1',
+  DISRECORD_USER_ID: 'u1',
+  DISRECORD_GUILD_ID: 'g1',
+  DISRECORD_CHANNEL_ID: 'c1',
+  DISRECORD_DEEPGRAM_MODE: 'platform',
   CORE_SERVER_URL: 'http://core:3001',
   CORE_SERVER_TOKEN: 'jwt.placeholder.token',
 }
@@ -44,8 +44,8 @@ describe('resolveConfig — gateway mode', () => {
   })
 
   it('throws when a required env var is missing', () => {
-    setEnv({ ...GATEWAY_ENV, RESESH_DISCORD_TOKEN: '' })
-    expect(() => resolveConfig('gateway')).toThrow(/RESESH_DISCORD_TOKEN/)
+    setEnv({ ...GATEWAY_ENV, DISRECORD_DISCORD_TOKEN: '' })
+    expect(() => resolveConfig('gateway')).toThrow(/DISRECORD_DISCORD_TOKEN/)
   })
 
   it('honors PORT override', () => {
@@ -71,7 +71,7 @@ describe('resolveConfig — worker mode', () => {
   })
 
   it('passes through deepgramKey when mode is byok', () => {
-    setEnv({ ...WORKER_ENV, RESESH_DEEPGRAM_MODE: 'byok', RESESH_DEEPGRAM_KEY: 'dg-key' })
+    setEnv({ ...WORKER_ENV, DISRECORD_DEEPGRAM_MODE: 'byok', DISRECORD_DEEPGRAM_KEY: 'dg-key' })
     const c = resolveConfig('worker')
     if (c.mode !== 'worker') throw new Error('expected worker mode')
     expect(c.deepgramMode).toBe('byok')
@@ -79,19 +79,19 @@ describe('resolveConfig — worker mode', () => {
   })
 
   it('throws when a required env var is missing', () => {
-    setEnv({ ...WORKER_ENV, RESESH_SESSION_TOKEN: '' })
-    expect(() => resolveConfig('worker')).toThrow(/RESESH_SESSION_TOKEN/)
+    setEnv({ ...WORKER_ENV, DISRECORD_SESSION_TOKEN: '' })
+    expect(() => resolveConfig('worker')).toThrow(/DISRECORD_SESSION_TOKEN/)
   })
 
-  it('honors RESESH_SIZE override', () => {
-    setEnv({ ...WORKER_ENV, RESESH_SIZE: 'small' })
+  it('honors DISRECORD_SIZE override', () => {
+    setEnv({ ...WORKER_ENV, DISRECORD_SIZE: 'small' })
     const c = resolveConfig('worker')
     if (c.mode !== 'worker') throw new Error('expected worker mode')
     expect(c.size).toBe('small')
   })
 
-  it('rejects invalid RESESH_SIZE', () => {
-    setEnv({ ...WORKER_ENV, RESESH_SIZE: 'jumbo' })
-    expect(() => resolveConfig('worker')).toThrow(/Invalid RESESH_SIZE/)
+  it('rejects invalid DISRECORD_SIZE', () => {
+    setEnv({ ...WORKER_ENV, DISRECORD_SIZE: 'jumbo' })
+    expect(() => resolveConfig('worker')).toThrow(/Invalid DISRECORD_SIZE/)
   })
 })

@@ -45,7 +45,7 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
       size: config.size,
       deepgramMode: config.deepgramMode,
     },
-    'starting cfg-resesh worker',
+    'starting cfg-server-disrecord worker',
   )
 
   // ── 1. core-server client + session policy

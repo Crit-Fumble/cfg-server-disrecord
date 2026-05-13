@@ -1,5 +1,5 @@
 /**
- * cfg-resesh entrypoint.
+ * cfg-server-disrecord entrypoint.
  *
  * Mode selected by the first CLI arg:
  *   node dist/index.js gateway    → always-on gateway-router
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
     logger.fatal({ provided: mode }, 'Usage: node dist/index.js <gateway|worker>')
     process.exit(2)
   }
-  process.env.RESESH_MODE_HINT = mode
+  process.env.DISRECORD_MODE_HINT = mode
   const config = resolveConfig(mode as Mode)
 
   if (config.mode === 'gateway') {
@@ -30,6 +30,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  logger.fatal({ err }, 'fatal error in cfg-resesh main')
+  logger.fatal({ err }, 'fatal error in cfg-server-disrecord main')
   process.exit(1)
 })

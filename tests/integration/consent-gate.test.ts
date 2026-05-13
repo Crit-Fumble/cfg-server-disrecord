@@ -8,7 +8,7 @@
  *   4. Verify: the consenter's transcript arrives verbatim; the non-
  *      consenter's turn appears as a single `[redacted]` event
  *
- * Skipped unless RESESH_INTEGRATION_TESTS_ENABLED=true.
+ * Skipped unless DISRECORD_INTEGRATION_TESTS_ENABLED=true.
  */
 
 import { describeIntegration } from './_helpers/setup.js'

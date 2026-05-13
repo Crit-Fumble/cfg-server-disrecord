@@ -2,7 +2,7 @@
  * HTTP client for worker → core-server callbacks.
  *
  * Auth: per-session JWT (CORE_SERVER_TOKEN), minted by core-server at
- * provisioning time. scope='resesh-worker' + installationId claim, signed
+ * provisioning time. scope='disrecord-worker' + installationId claim, signed
  * with AUTH_SECRET. core-server rejects on scope/installation mismatch.
  *
  * Three endpoints (all under /api/v1/):

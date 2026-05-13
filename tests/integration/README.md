@@ -1,27 +1,27 @@
-# cfg-resesh integration tests
+# cfg-server-disrecord integration tests
 
 Integration tests exercise real Discord + Deepgram against the
 **Dev Den** guild (Discord ID `1153767296867770378`).
 
 ## Setup
 
-1. Confirm the cfg-resesh Discord application (client_id `1504164101553656028`)
+1. Confirm the cfg-server-disrecord Discord application (client_id `1504164101553656028`)
    is invited to the Dev Den guild with the `bot` + `applications.commands`
    scopes and the following intents enabled:
    - Guild Voice States
    - Guild Members
    - Message Content
-2. Create a voice channel in Dev Den named `cfg-resesh-test` for the suite
+2. Create a voice channel in Dev Den named `cfg-server-disrecord-test` for the suite
    to join.
 3. Export env vars before running:
    ```sh
-   export RESESH_INTEGRATION_TESTS_ENABLED=true
-   export RESESH_DISCORD_TOKEN=...           # bot token for client_id 1504164101553656028
+   export DISRECORD_INTEGRATION_TESTS_ENABLED=true
+   export DISRECORD_DISCORD_TOKEN=...           # bot token for client_id 1504164101553656028
    export DEEPGRAM_API_KEY=...                # platform Deepgram key
    export CORE_SERVER_URL=http://localhost:3001
-   export RESESH_GATEWAY_BEARER=...           # shared bearer for the integration test → gateway control-plane hop
-   export RESESH_TEST_GUILD_ID=1153767296867770378
-   export RESESH_TEST_CHANNEL_ID=...          # voice channel id in Dev Den
+   export DISRECORD_GATEWAY_BEARER=...           # shared bearer for the integration test → gateway control-plane hop
+   export DISRECORD_TEST_GUILD_ID=1153767296867770378
+   export DISRECORD_TEST_CHANNEL_ID=...          # voice channel id in Dev Den
    ```
 4. Start the local cfg-core-server stack (so the worker can POST transcripts).
 

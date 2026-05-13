@@ -16,7 +16,7 @@ function fakeRecord(overrides: Partial<SessionRecord> = {}): SessionRecord {
     channelId: 'c-1',
     userId: 'u-1',
     containerId: 'docker-abc',
-    containerName: 'cfg-resesh-worker-inst-1',
+    containerName: 'cfg-server-disrecord-worker-inst-1',
     hostPort: null,
     sessionToken: 'tok-xyz',
     status: 'ready',

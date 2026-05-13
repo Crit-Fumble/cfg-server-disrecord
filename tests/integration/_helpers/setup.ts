@@ -4,7 +4,7 @@
  * Discord client.
  */
 
-export const INTEGRATION_ENABLED = process.env.RESESH_INTEGRATION_TESTS_ENABLED === 'true'
+export const INTEGRATION_ENABLED = process.env.DISRECORD_INTEGRATION_TESTS_ENABLED === 'true'
 
 /** Dev Den guild — the official testing playground per Hob 2026-05-13. */
 export const DEV_DEN_GUILD_ID = '1153767296867770378'
@@ -21,23 +21,23 @@ export interface IntegrationEnv {
 
 export function getIntegrationEnv(): IntegrationEnv {
   const required = [
-    'RESESH_DISCORD_TOKEN',
+    'DISRECORD_DISCORD_TOKEN',
     'DEEPGRAM_API_KEY',
     'CORE_SERVER_URL',
-    'RESESH_GATEWAY_BEARER',
-    'RESESH_TEST_CHANNEL_ID',
+    'DISRECORD_GATEWAY_BEARER',
+    'DISRECORD_TEST_CHANNEL_ID',
   ] as const
   const missing = required.filter((k) => !process.env[k])
   if (missing.length > 0) {
     throw new Error(`integration env missing: ${missing.join(', ')}`)
   }
   return {
-    discordToken: process.env.RESESH_DISCORD_TOKEN!,
+    discordToken: process.env.DISRECORD_DISCORD_TOKEN!,
     deepgramApiKey: process.env.DEEPGRAM_API_KEY!,
     coreServerUrl: process.env.CORE_SERVER_URL!,
-    gatewayBearer: process.env.RESESH_GATEWAY_BEARER!,
-    guildId: process.env.RESESH_TEST_GUILD_ID ?? DEV_DEN_GUILD_ID,
-    channelId: process.env.RESESH_TEST_CHANNEL_ID!,
+    gatewayBearer: process.env.DISRECORD_GATEWAY_BEARER!,
+    guildId: process.env.DISRECORD_TEST_GUILD_ID ?? DEV_DEN_GUILD_ID,
+    channelId: process.env.DISRECORD_TEST_CHANNEL_ID!,
   }
 }
 

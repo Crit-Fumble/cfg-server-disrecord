@@ -7,7 +7,7 @@
  *   2. Hands off tokens to a worker process
  *   3. Worker's @discordjs/voice voice connection reaches Ready state
  *
- * Skipped unless RESESH_INTEGRATION_TESTS_ENABLED=true.
+ * Skipped unless DISRECORD_INTEGRATION_TESTS_ENABLED=true.
  */
 
 import { describeIntegration, getIntegrationEnv } from './_helpers/setup.js'

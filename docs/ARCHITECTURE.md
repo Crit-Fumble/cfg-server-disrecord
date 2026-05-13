@@ -1,4 +1,4 @@
-# cfg-resesh Architecture
+# cfg-server-disrecord Architecture
 
 ## Two-mode binary
 
@@ -36,10 +36,10 @@ event auto-start, or core-server API call):
 2. Captures `VOICE_SERVER_UPDATE` token + `VOICE_STATE_UPDATE` session_id
 3. Calls core-server's billing endpoint to confirm CT availability
 4. Spawns a worker container (via `dockerode` on the host) with env:
-   - `RESESH_VOICE_TOKEN`, `RESESH_VOICE_SESSION_ID`, `RESESH_VOICE_ENDPOINT`
-   - `RESESH_GUILD_ID`, `RESESH_CHANNEL_ID`, `RESESH_USER_ID`, `RESESH_INSTALLATION_ID`
-   - `RESESH_DEEPGRAM_MODE`: `platform` | `byok` | `disabled`
-   - `RESESH_DEEPGRAM_KEY`: present only when mode=`byok` (encrypted by core-server, decrypted here)
+   - `DISRECORD_VOICE_TOKEN`, `DISRECORD_VOICE_SESSION_ID`, `DISRECORD_VOICE_ENDPOINT`
+   - `DISRECORD_GUILD_ID`, `DISRECORD_CHANNEL_ID`, `DISRECORD_USER_ID`, `DISRECORD_INSTALLATION_ID`
+   - `DISRECORD_DEEPGRAM_MODE`: `platform` | `byok` | `disabled`
+   - `DISRECORD_DEEPGRAM_KEY`: present only when mode=`byok` (encrypted by core-server, decrypted here)
 5. Worker connects directly to Discord voice WSS using the handed-off tokens
 6. Worker records, streams to Deepgram, persists transcript via core-server API
 7. On session end (or worker exit), gateway emits final billing tick

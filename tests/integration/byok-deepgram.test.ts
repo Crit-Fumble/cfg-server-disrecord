@@ -8,7 +8,7 @@
  *   3. Verify: transcripts arrive, BUT no `transcription_minutes` billing
  *      events are emitted against the user's CT pool (only `container_uptime`)
  *
- * Skipped unless RESESH_INTEGRATION_TESTS_ENABLED=true.
+ * Skipped unless DISRECORD_INTEGRATION_TESTS_ENABLED=true.
  */
 
 import { describeIntegration } from './_helpers/setup.js'
