@@ -1,89 +1,109 @@
 /**
- * Gateway-router — always-on Discord gateway connection + HTTP API.
+ * Gateway-router entrypoint — wires Discord, voice, opus bus, session store,
+ * worker spawner, and Fastify routes.
  *
- * Single bot identity (client_id 1504164101553656028). On a recording trigger
- * (slash command, scheduled-event auto-start, or core-server API call), this
- * process joins the voice channel, captures the handoff tokens, and spawns a
- * worker container that does the actual recording.
+ * Boot order:
+ *   1. Listen on the HTTP port FIRST so /health responds during Discord connect
+ *   2. Connect Discord client (fails fast if token invalid)
+ *   3. Reconcile session state from already-running worker containers (orphans
+ *      from a previous crash get registered so they can be cleanly stopped)
  *
- * v0.1 skeleton — port voice-join + worker-spawn from cfg-core-server.
+ * Architecture details: see docs/gateway-core-infra.md and
+ * docs/voice-transport-analysis.md (Option B).
  */
 
 import { Client, GatewayIntentBits } from 'discord.js'
 import Fastify from 'fastify'
 import { logger as rootLogger } from './logger.js'
 import type { GatewayConfig } from './config.js'
+import { SessionStore } from './gateway/session-store.js'
+import { OpusBus } from './gateway/opus-bus.js'
+import { VoiceManager } from './gateway/voice-manager.js'
+import { WorkerSpawner } from './gateway/worker-spawn.js'
+import { registerRoutes } from './gateway/routes.js'
 
 const logger = rootLogger.child({ module: 'gateway' })
 
 export async function startGateway(config: GatewayConfig): Promise<void> {
   logger.info({ port: config.port }, 'starting cfg-resesh gateway')
 
-  // 1. Discord gateway connection
+  // 1. Wire dependencies
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildVoiceStates,
+      GatewayIntentBits.GuildMembers,
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
     ],
   })
-
   client.once('ready', (c) => {
     logger.info({ user: c.user.tag, id: c.user.id }, 'discord gateway ready')
   })
-
   client.on('error', (err) => logger.error({ err }, 'discord client error'))
 
-  // 2. HTTP API (core-server calls in)
+  const store = new SessionStore()
+  const bus = new OpusBus()
+  const voiceManager = new VoiceManager({
+    client,
+    bus,
+    logger: rootLogger.child({ module: 'voice-manager' }),
+  })
+  const spawner = new WorkerSpawner({
+    dockerSocketPath: config.dockerSocketPath,
+    workerImage: config.workerImageTag,
+    gatewayUrl: `http://localhost:${config.port}`, // workers call back on loopback (same container network)
+    coreServerAuthSecret: config.coreServerAuthSecret,
+    coreServerUrl: config.coreServerUrl,
+    logger: rootLogger.child({ module: 'worker-spawn' }),
+  })
+
+  // 2. HTTP API
   const fastify = Fastify({ logger: false })
-
-  fastify.get('/health', async () => ({
-    status: 'ok',
-    discordReady: client.isReady(),
-    uptimeSec: process.uptime(),
-  }))
-
-  fastify.post<{ Body: StartSessionBody }>('/v1/sessions', {
-    schema: {
-      body: {
-        type: 'object',
-        required: ['guildId', 'channelId', 'userId', 'installationId', 'deepgramMode'],
-        properties: {
-          guildId: { type: 'string' },
-          channelId: { type: 'string' },
-          userId: { type: 'string' },
-          installationId: { type: 'string' },
-          deepgramMode: { type: 'string', enum: ['platform', 'byok', 'disabled'] },
-          deepgramKey: { type: 'string', nullable: true },
-        },
-      },
-    },
-    handler: async (req, reply) => {
-      // TODO(cfg-core-dev-tools#121): authenticate via shared secret,
-      // join the voice channel, capture handoff tokens, spawn worker.
-      logger.info({ body: req.body }, 'session start requested (stub)')
-      return reply.status(501).send({ error: 'not_implemented' })
-    },
+  registerRoutes(fastify, {
+    client,
+    store,
+    bus,
+    voiceManager,
+    spawner,
+    authSecret: config.coreServerAuthSecret,
+    logger: rootLogger.child({ module: 'routes' }),
   })
 
-  fastify.delete<{ Params: { id: string } }>('/v1/sessions/:id', async (req, reply) => {
-    // TODO(cfg-core-dev-tools#121): stop worker container + emit final billing tick.
-    logger.info({ id: req.params.id }, 'session stop requested (stub)')
-    return reply.status(501).send({ error: 'not_implemented' })
-  })
-
-  // 3. Boot order: HTTP first (core-server can ping /health while Discord
-  // is still connecting), then Discord login.
   await fastify.listen({ port: config.port, host: '0.0.0.0' })
   logger.info({ port: config.port }, 'http api listening')
 
+  // 3. Discord
   await client.login(config.discordToken)
+
+  // 4. Reconcile from Docker
+  try {
+    const orphans = await spawner.reconcile()
+    if (orphans.length > 0) {
+      logger.warn(
+        { count: orphans.length, ids: orphans.map((o) => o.installationId) },
+        'found orphan worker containers from previous gateway run — stopping them',
+      )
+      for (const orphan of orphans) {
+        await spawner.stop(orphan.installationId).catch((err) => {
+          logger.warn({ err, installationId: orphan.installationId }, 'orphan stop failed')
+        })
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, 'docker reconciliation failed (continuing)')
+  }
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'shutting down gateway')
     try {
+      // Stop all active sessions cleanly so workers emit final billing ticks
+      const active = store.list()
+      for (const record of active) {
+        voiceManager.leave(record.installationId, `gateway-${signal}`)
+        await spawner.stop(record.installationId).catch(() => undefined)
+      }
       await fastify.close()
       client.destroy()
     } finally {
@@ -92,13 +112,4 @@ export async function startGateway(config: GatewayConfig): Promise<void> {
   }
   process.on('SIGTERM', () => void shutdown('SIGTERM'))
   process.on('SIGINT', () => void shutdown('SIGINT'))
-}
-
-interface StartSessionBody {
-  guildId: string
-  channelId: string
-  userId: string
-  installationId: string
-  deepgramMode: 'platform' | 'byok' | 'disabled'
-  deepgramKey?: string
 }
