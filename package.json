@@ -1,15 +1,15 @@
 {
-  "name": "@crit-fumble/resesh",
+  "name": "@crit-fumble/server-disrecord",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Crit-Fumble ReSesh — Discord voice recording + transcription server. Discord application 1504164101553656028.",
+  "description": "Crit-Fumble DisRecord — Discord voice recording + transcription server kind. Backend for the ReSesh app (Discord application 1504164101553656028).",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Crit-Fumble/cfg-resesh.git"
+    "url": "git+https://github.com/Crit-Fumble/cfg-server-disrecord.git"
   },
-  "homepage": "https://github.com/Crit-Fumble/cfg-resesh",
+  "homepage": "https://github.com/Crit-Fumble/cfg-server-disrecord",
   "main": "./dist/index.js",
   "scripts": {
     "dev:gateway": "tsx watch --env-file=.env --clear-screen=false src/index.ts gateway",
