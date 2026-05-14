@@ -142,7 +142,7 @@ After the app is set up, the operator-side configuration for core-server:
 | `DISRECORD_DISCORD_TOKEN` | Bot token from the Bot tab |
 | `DISRECORD_DISCORD_CLIENT_SECRET` | Client secret from the OAuth2 tab |
 
-### Non-secrets (`config/<env>.json` in cfg-core-server + cfg-core-browser)
+### Non-secrets (`config/<env>.json`)
 
 | Field | Value |
 |---|---|
@@ -153,6 +153,17 @@ After the app is set up, the operator-side configuration for core-server:
 
 The cfg-core-browser side only needs `disrecordDiscordClientId` (public,
 sent to the browser for the install button + Activity SDK init).
+
+> **Gotcha — runtime config overlay.** The orchestration docker-compose
+> mounts `orchestration/config-overrides/<env>.json` over
+> `/app/config/<env>.json` inside the core-server container. So the
+> repo's AGPL-default config is shadowed at runtime by the CFG-specific
+> overlay. Any new field added in cfg-core-server's
+> `config/<env>.json` **must also be added** to
+> `orchestration/config-overrides/<env>.json` for the container to see
+> it. The symptom of forgetting is "serverConfig field is empty in the
+> container even though the AGPL repo file has the value." Same split
+> applies for cfg-core-browser's config + its overlay.
 
 ## Smoke test the new environment
 
