@@ -33,8 +33,17 @@ export interface WorkerConfig {
    * credential.
    */
   coreServerToken: string
-  /** Container instance size — drives the bot_container CT rate. */
+  /** Container instance size — informational only; rate comes from `ctPerMinute`. */
   size: 'nano' | 'micro' | 'small'
+  /**
+   * Worker-billing rate in CT/min, computed by core-server's slot-fraction
+   * formula at provision time (see cfg-core-server `container-sizing.ts`).
+   * The worker bills this rate verbatim on each tick; it doesn't run its
+   * own size→rate table anymore. core-server is the pricing source of
+   * truth so the displayed rate, the worker's per-tick claim, and the
+   * actual wallet debit all agree.
+   */
+  ctPerMinute: number
   logLevel: string
 }
 
@@ -49,9 +58,17 @@ function optionalEnv(name: string, fallback: string): string {
 }
 
 export function resolveConfig(): WorkerConfig {
-  const size = optionalEnv('DISRECORD_SIZE', 'micro') as WorkerConfig['size']
+  const size = optionalEnv('DISRECORD_SIZE', 'nano') as WorkerConfig['size']
   if (size !== 'nano' && size !== 'micro' && size !== 'small') {
     throw new Error(`Invalid DISRECORD_SIZE: ${size}`)
+  }
+  // core-server picks the rate and passes it in. Standalone-runs without
+  // core-server (rare; mostly dev) fall back to a conservative default that
+  // matches nano's slot-fraction price under the current $24 droplet.
+  const ctPerMinRaw = process.env.DISRECORD_CT_PER_MIN
+  const ctPerMinute = ctPerMinRaw ? Number(ctPerMinRaw) : 13
+  if (!Number.isFinite(ctPerMinute) || ctPerMinute <= 0) {
+    throw new Error(`Invalid DISRECORD_CT_PER_MIN: ${ctPerMinRaw}`)
   }
   return {
     installationId: requireEnv('DISRECORD_INSTALLATION_ID'),
@@ -63,6 +80,7 @@ export function resolveConfig(): WorkerConfig {
     coreServerUrl: requireEnv('CORE_SERVER_URL'),
     coreServerToken: requireEnv('CORE_SERVER_TOKEN'),
     size,
+    ctPerMinute,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
   }
 }

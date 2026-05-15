@@ -35,7 +35,15 @@ describe('resolveConfig', () => {
     expect(c.deepgramKey).toBeUndefined()
     expect(c.coreServerUrl).toBe('http://core:3001')
     expect(c.coreServerToken).toBe('jwt.placeholder.token')
-    expect(c.size).toBe('micro')
+    // Default changed micro → nano when micro was deprecated under the
+    // slot-fraction pricing model (micro and nano cost the same, so
+    // defaulting to nano gives a smaller container for the same price).
+    // core-server passes an explicit DISRECORD_SIZE per spawn now; the
+    // default is only the fallback for standalone worker runs.
+    expect(c.size).toBe('nano')
+    // ctPerMinute is passed in from core-server via env. Standalone fallback
+    // matches nano's slot-fraction price under the current $24 droplet.
+    expect(c.ctPerMinute).toBe(13)
   })
 
   it('passes through deepgramKey when mode is byok', () => {

@@ -53,6 +53,10 @@ interface SpeakerEndEvent {
 interface SessionEndEvent {
   reason: string
 }
+interface ConsentUpdateEvent {
+  userId: string
+  consented: boolean
+}
 
 export class VoiceReceiver {
   private decoder: opus.OpusEncoder
@@ -195,6 +199,31 @@ export class VoiceReceiver {
           const payload = JSON.parse(data) as SessionEndEvent
           this.params.logger?.info({ reason: payload.reason }, 'core-server signaled session-end')
           this.aborter.abort()
+          break
+        }
+        case 'pause': {
+          // No payload — core-server flips this when /voice-remote pause
+          // arrives. Worker stops feeding Deepgram + drops in-flight bursts.
+          this.params.session.setPaused(true)
+          this.params.logger?.info('session paused')
+          break
+        }
+        case 'resume': {
+          this.params.session.setPaused(false)
+          this.params.logger?.info('session resumed')
+          break
+        }
+        case 'consent-update': {
+          const payload = JSON.parse(data) as ConsentUpdateEvent
+          if (payload.consented) {
+            await this.params.session.addConsentedUser(payload.userId)
+          } else {
+            this.params.session.addDeclinedUser(payload.userId)
+          }
+          this.params.logger?.info(
+            { userId: payload.userId, consented: payload.consented },
+            'consent update applied',
+          )
           break
         }
         default:

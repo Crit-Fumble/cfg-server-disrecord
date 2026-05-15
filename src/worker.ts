@@ -26,17 +26,10 @@ const logger = rootLogger.child({ module: 'worker' })
 /** Periodic CT billing tick (uptime). 15 min matches existing cfg-core-server cadence. */
 const BILLING_TICK_MINUTES = 15
 
-/**
- * Local CT/min rates per size. Mirrors cfg-core-server's
- * localContainerRates.vttSizes shape (we reuse those numbers because the
- * resource shape is identical). When pricing config moves into shared, swap
- * for a runtime lookup.
- */
-const CT_PER_MIN_BY_SIZE: Record<WorkerConfig['size'], number> = {
-  nano: 6,
-  micro: 8,
-  small: 16,
-}
+// CT/min comes from `config.ctPerMinute` — core-server's slot-fraction
+// formula is the single source of truth. Worker no longer keeps its own
+// size→rate table (it would just be a stale shadow that drifts whenever
+// the host droplet changes or the markup gets retuned).
 
 export async function startWorker(config: WorkerConfig): Promise<void> {
   logger.info(
@@ -59,7 +52,12 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
   })
   const policy = await core.fetchSessionPolicy()
   logger.info(
-    { consentedCount: policy.consentedUserIds.length, namedCount: Object.keys(policy.speakerNames).length },
+    {
+      consentedCount: policy.consentedUserIds.length,
+      namedCount: Object.keys(policy.speakerNames).length,
+      keywordCount: policy.keywords?.length ?? 0,
+      keytermCount: policy.keyterms?.length ?? 0,
+    },
     'session policy fetched',
   )
 
@@ -70,6 +68,8 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
   const session = new RecordingSession({
     deepgramApiKey: deepgramKey,
     consentedUserIds: consent,
+    keywords: policy.keywords,
+    keyterms: policy.keyterms,
     resolveSpeakerName: async (userId) => policy.speakerNames[userId] ?? userId,
     onTranscriptFinal: async (event: TranscriptFinalEvent) => {
       await core.postTranscript({
@@ -96,11 +96,21 @@ export async function startWorker(config: WorkerConfig): Promise<void> {
     logger: rootLogger.child({ module: 'voice-receiver' }),
   })
 
-  // ── 4. periodic billing tick
-  const ctPerMin = CT_PER_MIN_BY_SIZE[config.size]
+  // ── 4. periodic billing tick (only while NOT paused).
+  // The legacy in-process path billed at "first consent" — not at provision.
+  // We mirror that by skipping ticks while the session is paused (which
+  // core-server toggles via the audio-bus pause/resume events). Without
+  // this, users pay for the 0-30s consent-wait window every session.
+  const ctPerMin = config.ctPerMinute
   const tickIntervalMs = BILLING_TICK_MINUTES * 60_000
   let lastTickAt = Date.now()
   const tickTimer = setInterval(() => {
+    if (session.paused) {
+      // Slide lastTickAt forward so the resume-side tick doesn't bill for
+      // the paused interval. We bill only for time the worker was active.
+      lastTickAt = Date.now()
+      return
+    }
     const now = Date.now()
     const minutes = (now - lastTickAt) / 60_000
     lastTickAt = now

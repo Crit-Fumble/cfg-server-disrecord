@@ -67,6 +67,12 @@ export interface RecordingSessionParams {
 }
 
 export class RecordingSession {
+  /**
+   * Pause flag. Public for legacy tests; callers should prefer `setPaused()`
+   * so they get the side-effect cleanup (flush in-flight bursts, close
+   * Deepgram streams). `onSpeakerData` short-circuits on `paused` regardless
+   * of how it was set.
+   */
   public paused = false
 
   private readonly deepgramApiKey: string | null
@@ -91,6 +97,24 @@ export class RecordingSession {
    */
   private readonly redactedInFlight = new Map<string, { sawData: boolean; startSec: number }>()
 
+  /**
+   * Last `[redacted]` emit timestamp per speaker, in session seconds. Used
+   * to coalesce a single human "speech run" — Discord fires speaker-end on
+   * every brief pause, which would emit one `[redacted]` line per burst
+   * (visible as `[redacted]: [redacted]\n[redacted]: [redacted]\n…` in the
+   * thread). We suppress redundant markers within `REDACTION_COALESCE_SEC`
+   * of the previous one so callers see one line per actual run of speech.
+   */
+  private readonly lastRedactedEmitSec = new Map<string, number>()
+
+  /**
+   * Seconds of silence before a non-consenter's next burst is treated as a
+   * new redaction run (and gets its own `[redacted]` marker). Tuned to
+   * match Discord's typical speaker-end debounce (~1-2s) plus headroom —
+   * anything inside this window collapses to the existing marker.
+   */
+  private static readonly REDACTION_COALESCE_SEC = 10
+
   private sessionStartedAtMs: number | null = null
 
   constructor(params: RecordingSessionParams) {
@@ -113,7 +137,31 @@ export class RecordingSession {
     return this.sessionStartedAtMs
   }
 
+  /**
+   * Toggle pause. When paused:
+   *   - `onSpeakerData` short-circuits (no audio to Deepgram, no audio
+   *     would land in a future mp3 mix)
+   *   - any in-flight redaction trackers are cleared so a paused-during
+   *     burst doesn't emit a delayed `[redacted]` marker on resume
+   *   - live Deepgram streams are left open (avoids 1-3s reconnect cost
+   *     on resume — they just receive no frames while paused)
+   */
+  setPaused(paused: boolean): void {
+    if (this.paused === paused) return
+    this.paused = paused
+    if (paused) {
+      // Discard any partial redacted turns — we can't honestly mark them
+      // and the next post-pause burst will start a fresh tracker anyway.
+      this.redactedInFlight.clear()
+    }
+  }
+
   async onSpeakerStart(userId: string): Promise<void> {
+    // Pause gate: ignore all speaker activity while paused. The worker
+    // honoring this matches the legacy in-process pause: no transcripts,
+    // no audio, no `[redacted]` markers from the pause window.
+    if (this.paused) return
+
     // Redaction gate: non-consenters never get a Deepgram stream. Track them
     // so onSpeakerEnd can emit a [redacted] placeholder (vs silently dropping).
     if (this.consentedUserIds != null && !this.consentedUserIds.has(userId)) {
@@ -222,20 +270,13 @@ export class RecordingSession {
   }
 
   async onSpeakerEnd(userId: string): Promise<void> {
+    if (this.paused) return
     const inFlight = this.redactedInFlight.get(userId)
     if (inFlight) {
       this.redactedInFlight.delete(userId)
       if (inFlight.sawData) {
         const endSec = (Date.now() - this.getSessionStartedAtMs()) / 1000
-        await this.emit({
-          speakerId: userId,
-          speakerName: '[redacted]',
-          transcript: '[redacted]',
-          isRedacted: true,
-          startSec: inFlight.startSec,
-          endSec: Math.max(endSec, inFlight.startSec + 0.1),
-          words: [],
-        })
+        await this.emitRedactedIfDistinct(userId, inFlight.startSec, endSec)
       }
     }
 
@@ -255,15 +296,7 @@ export class RecordingSession {
     this.redactedInFlight.delete(userId)
     if (inFlight?.sawData) {
       const nowSec = (Date.now() - this.getSessionStartedAtMs()) / 1000
-      await this.emit({
-        speakerId: userId,
-        speakerName: '[redacted]',
-        transcript: '[redacted]',
-        isRedacted: true,
-        startSec: inFlight.startSec,
-        endSec: Math.max(nowSec, inFlight.startSec + 0.1),
-        words: [],
-      })
+      await this.emitRedactedIfDistinct(userId, inFlight.startSec, nowSec)
     }
     this.consentedUserIds.add(userId)
     const existing = this.speakerStreams.get(userId)
@@ -290,17 +323,10 @@ export class RecordingSession {
     const stopSec = (Date.now() - this.getSessionStartedAtMs()) / 1000
     for (const [userId, inFlight] of this.redactedInFlight) {
       if (!inFlight.sawData) continue
-      await this.emit({
-        speakerId: userId,
-        speakerName: '[redacted]',
-        transcript: '[redacted]',
-        isRedacted: true,
-        startSec: inFlight.startSec,
-        endSec: Math.max(stopSec, inFlight.startSec + 0.1),
-        words: [],
-      })
+      await this.emitRedactedIfDistinct(userId, inFlight.startSec, stopSec)
     }
     this.redactedInFlight.clear()
+    this.lastRedactedEmitSec.clear()
 
     const closes = Array.from(this.speakerStreams.values()).map((s) => s.close())
     await Promise.allSettled(closes)
@@ -313,5 +339,36 @@ export class RecordingSession {
     } catch (err) {
       this.logger?.error({ err, speakerId: event.speakerId }, 'onTranscriptFinal threw')
     }
+  }
+
+  /**
+   * Emit a `[redacted]` marker for `userId` only if there hasn't been one
+   * for the same speaker within `REDACTION_COALESCE_SEC`. Discord's
+   * speaker-end fires on every short pause, so without this gate one
+   * continuous run of speech becomes a wall of `[redacted]: [redacted]`
+   * lines in the transcript thread.
+   *
+   * When suppressed, we still update `lastRedactedEmitSec` to the new
+   * `endSec` so the suppression window slides — i.e. as long as the user
+   * keeps talking, no new markers; once they actually go silent for the
+   * full window, the next burst gets its own marker.
+   */
+  private async emitRedactedIfDistinct(userId: string, startSec: number, endSec: number): Promise<void> {
+    const lastEmitSec = this.lastRedactedEmitSec.get(userId)
+    if (lastEmitSec !== undefined && startSec - lastEmitSec < RecordingSession.REDACTION_COALESCE_SEC) {
+      // Slide the window — the user is still in a continuous speech run.
+      this.lastRedactedEmitSec.set(userId, endSec)
+      return
+    }
+    this.lastRedactedEmitSec.set(userId, endSec)
+    await this.emit({
+      speakerId: userId,
+      speakerName: '[redacted]',
+      transcript: '[redacted]',
+      isRedacted: true,
+      startSec,
+      endSec: Math.max(endSec, startSec + 0.1),
+      words: [],
+    })
   }
 }

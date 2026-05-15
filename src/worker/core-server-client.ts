@@ -31,6 +31,18 @@ export interface CoreServerClientParams {
 export interface SessionPolicy {
   consentedUserIds: string[]
   speakerNames: Record<string, string>
+  /**
+   * Deepgram per-utterance keywords (legacy keywords API). Boosts general
+   * recall for in-domain terms like character names, factions, locations.
+   * Composed server-side per campaign/session.
+   */
+  keywords?: string[]
+  /**
+   * Deepgram nova-3 keyterms (replaces keywords for nova-3). Same purpose,
+   * different API. Worker forwards both — Deepgram picks whichever applies
+   * to the requested model.
+   */
+  keyterms?: string[]
 }
 
 export interface TranscriptPayload {
