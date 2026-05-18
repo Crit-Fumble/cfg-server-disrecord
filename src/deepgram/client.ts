@@ -16,7 +16,16 @@ import { WebSocket } from 'ws'
 import type { DeepgramStreamOptions, DeepgramResult, DeepgramUtteranceEnd, TranscriptEvent } from './types.js'
 
 const DEEPGRAM_WS_URL = 'wss://api.deepgram.com/v1/listen'
-const KEEPALIVE_INTERVAL_MS = 8_000 // Deepgram closes idle connections after ~12s
+// Deepgram closes idle WebSocket connections after a ~10-12s inactivity
+// timeout. The 2026-05-12 prod session log shows 9 mid-session closes
+// across a 2-hour D&D session — every silence longer than ~10s triggered
+// a reconnect, each costing 1-3s of WS handshake on the next utterance
+// before audio could resume streaming. See cfg-core-server #63.
+//
+// 4s gives 6-8s of headroom against the 10-12s timeout, comfortably
+// absorbing network jitter. Lower (3s) is also documented by Deepgram
+// but felt unnecessarily chatty; 4s is the sweet spot in practice.
+const KEEPALIVE_INTERVAL_MS = 4_000
 
 /**
  * Build the Deepgram Live WebSocket URL from a caller's options. Pure — no
