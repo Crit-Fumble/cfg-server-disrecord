@@ -16,6 +16,22 @@ import { WebSocket } from 'ws'
 import type { DeepgramStreamOptions, DeepgramResult, DeepgramUtteranceEnd, TranscriptEvent } from './types.js'
 
 const DEEPGRAM_WS_URL = 'wss://api.deepgram.com/v1/listen'
+
+/**
+ * Strip any credential-shaped params before logging the URL. The current
+ * code path doesn't put the key in the URL (we use the Authorization
+ * header), but a future caller might, and this is defense-in-depth.
+ */
+function redactDeepgramUrlForLog(url: string): string {
+  try {
+    const parsed = new URL(url)
+    if (parsed.searchParams.has('access_token')) parsed.searchParams.set('access_token', '[redacted]')
+    if (parsed.searchParams.has('token')) parsed.searchParams.set('token', '[redacted]')
+    return parsed.toString()
+  } catch {
+    return '[unparseable-url]'
+  }
+}
 // Deepgram closes idle WebSocket connections after a ~10-12s inactivity
 // timeout. The 2026-05-12 prod session log shows 9 mid-session closes
 // across a 2-hour D&D session — every silence longer than ~10s triggered
@@ -62,11 +78,47 @@ export function buildDeepgramUrl(options: DeepgramStreamOptions = {}): string {
   } else if (options.endpointing != null) {
     params.set('endpointing', String(options.endpointing))
   }
+  // Nova-3 does not support the `keywords` parameter — it requires
+  // `keyterm` (singular, repeated) instead. Sending `keywords` with
+  // `model=nova-3` causes Deepgram to reject the WebSocket handshake
+  // with HTTP 400, which silently bricks transcription for every
+  // campaign-bound session (composeTranscriptionKeywords always
+  // produces single-word boosts in the `keywords` channel for D&D-style
+  // proper-noun sets). For Nova-3 we fold any `keywords` into the
+  // keyterm list with the `:boost` suffix stripped — Nova-3's keyterm
+  // boost is fixed at the API level and doesn't honor per-term weights.
+  //
+  // See https://developers.deepgram.com/docs/keyterm and
+  // https://developers.deepgram.com/docs/keywords (which calls out the
+  // Nova-3 exclusion explicitly).
+  const model = options.model ?? 'nova-3'
+  const isNova3 = model === 'nova-3'
+  const collectedKeyterms: string[] = []
   for (const kw of options.keywords ?? []) {
-    params.append('keywords', kw)
+    if (isNova3) {
+      // Strip the `:boost` suffix (last :digits) and trim. Empty entries
+      // are dropped so an accidental trailing comma in the keyword list
+      // doesn't produce an empty `keyterm=` that Deepgram will also
+      // reject as 400.
+      const bare = kw.replace(/:\d+$/, '').trim()
+      if (bare) collectedKeyterms.push(bare)
+    } else {
+      params.append('keywords', kw)
+    }
   }
   for (const kt of options.keyterms ?? []) {
-    params.append('keyterms', kt)
+    const trimmed = kt.trim()
+    if (trimmed) collectedKeyterms.push(trimmed)
+  }
+  // Dedupe case-insensitively before emitting so the URL stays compact
+  // and Deepgram doesn't see duplicate boosts (no functional issue, but
+  // wasted bytes on long campaign sets).
+  const seen = new Set<string>()
+  for (const term of collectedKeyterms) {
+    const key = term.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    params.append('keyterm', term)
   }
   if (options.vadEvents) params.set('vad_events', 'true')
 
@@ -153,6 +205,38 @@ export class DeepgramStreamingClient extends EventEmitter {
         } catch {
           // Ignore non-JSON messages (keepalive acks, etc.)
         }
+      })
+
+      // Capture Deepgram's response body on a failed handshake. The
+      // default `ws` library swallows the body — it only surfaces
+      // "Unexpected server response: 400", which is useless for
+      // debugging which URL parameter Deepgram is rejecting. With
+      // `unexpected-response`, we read the body ourselves and attach it
+      // to the error before propagating, so the actual Deepgram
+      // diagnostic ("model X does not support parameter Y", "invalid
+      // value for Z", etc.) lands in our logs.
+      this.ws.on('unexpected-response', (_req, res) => {
+        const chunks: Buffer[] = []
+        res.on('data', (c: Buffer) => chunks.push(c))
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8').slice(0, 2000)
+          const wsErr = new Error(
+            `Deepgram handshake rejected (HTTP ${res.statusCode}): ${body || '<empty body>'} | url=${redactDeepgramUrlForLog(url)}`,
+          )
+          this.stopKeepalive()
+          // Mirror the close-without-open lifecycle so callers see a
+          // single failure surface (error → reject → emit 'error').
+          this.emit('error', wsErr)
+          reject(wsErr)
+        })
+        res.on('error', () => {
+          const wsErr = new Error(
+            `Deepgram handshake rejected (HTTP ${res.statusCode}): <body read failed> | url=${redactDeepgramUrlForLog(url)}`,
+          )
+          this.stopKeepalive()
+          this.emit('error', wsErr)
+          reject(wsErr)
+        })
       })
 
       this.ws.on('error', (err: Error) => {

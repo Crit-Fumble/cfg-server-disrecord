@@ -106,49 +106,74 @@ describe('buildDeepgramUrl — endpointing + smart_format', () => {
   })
 })
 
-describe('buildDeepgramUrl — keywords', () => {
-  it('appends each keyword as a separate `keywords=` param', () => {
+describe('buildDeepgramUrl — keywords (Nova-3 fold-into-keyterm)', () => {
+  // Nova-3 doesn't accept the `keywords` parameter at all (Deepgram
+  // returns HTTP 400 on the WebSocket handshake). Since the worker
+  // defaults to Nova-3, the URL builder folds any caller-provided
+  // `keywords` into the `keyterm` list with the `:boost` suffix
+  // stripped. The legacy keyword-param shape is preserved only for
+  // callers that explicitly opt into an older model.
+  it('folds keywords into keyterm with the :boost suffix stripped on Nova-3', () => {
     const url = buildDeepgramUrl({ keywords: ['Gandalf:5', 'Fireball:3', 'Longsword:2'] })
-    const all = params(url).getAll('keywords')
-    expect(all).toEqual(['Gandalf:5', 'Fireball:3', 'Longsword:2'])
+    const q = params(url)
+    expect(q.has('keywords')).toBe(false)
+    expect(q.getAll('keyterm')).toEqual(['Gandalf', 'Fireball', 'Longsword'])
   })
 
-  it('omits keywords entirely when the list is empty or undefined', () => {
+  it('still emits `keywords` when the caller explicitly targets a non-Nova-3 model', () => {
+    const url = buildDeepgramUrl({ model: 'nova-2', keywords: ['Gandalf:5'] })
+    const q = params(url)
+    expect(q.getAll('keywords')).toEqual(['Gandalf:5'])
+    expect(q.has('keyterm')).toBe(false)
+  })
+
+  it('omits keywords AND keyterm entirely when both lists are empty', () => {
     expect(params(buildDeepgramUrl({})).has('keywords')).toBe(false)
-    expect(params(buildDeepgramUrl({ keywords: [] })).has('keywords')).toBe(false)
+    expect(params(buildDeepgramUrl({})).has('keyterm')).toBe(false)
+    expect(params(buildDeepgramUrl({ keywords: [] })).has('keyterm')).toBe(false)
   })
 
-  it('URL-encodes keywords with special characters', () => {
+  it('strips :boost for multi-word keywords folded into keyterm', () => {
     const url = buildDeepgramUrl({ keywords: ['Ancient Red Dragon:3'] })
-    // `URLSearchParams` encodes spaces as `+` — verify the round-trip is
-    // stable when Deepgram reads it back.
-    const all = params(url).getAll('keywords')
-    expect(all[0]).toBe('Ancient Red Dragon:3')
+    expect(params(url).getAll('keyterm')).toEqual(['Ancient Red Dragon'])
   })
 })
 
 describe('buildDeepgramUrl — keyterms (Nova-3 phrase boost, #677)', () => {
-  it('appends each keyterm as a separate `keyterms=` param', () => {
+  // Deepgram's documented param name is `keyterm` SINGULAR (repeated).
+  // The plural form `keyterms` returns HTTP 400 on the handshake — see
+  // the comment in client.ts and https://developers.deepgram.com/docs/keyterm.
+  // The caller's API still takes a `keyterms` array (list-of-keyterms
+  // reads naturally); only the wire-level param name is singular.
+  it('appends each keyterm as a separate `keyterm=` param', () => {
     const url = buildDeepgramUrl({
       keyterms: ['ancient red dragon', 'kick em in the unmentionables'],
     })
-    const all = params(url).getAll('keyterms')
+    const all = params(url).getAll('keyterm')
     expect(all).toEqual(['ancient red dragon', 'kick em in the unmentionables'])
   })
 
-  it('omits keyterms entirely when the list is empty or undefined', () => {
-    expect(params(buildDeepgramUrl({})).has('keyterms')).toBe(false)
-    expect(params(buildDeepgramUrl({ keyterms: [] })).has('keyterms')).toBe(false)
+  it('does not emit the (invalid) plural `keyterms` param', () => {
+    const url = buildDeepgramUrl({ keyterms: ['ancient red dragon'] })
+    expect(params(url).has('keyterms')).toBe(false)
   })
 
-  it('serializes keywords and keyterms side-by-side without collision', () => {
+  it('omits keyterm entirely when the list is empty or undefined', () => {
+    expect(params(buildDeepgramUrl({})).has('keyterm')).toBe(false)
+    expect(params(buildDeepgramUrl({ keyterms: [] })).has('keyterm')).toBe(false)
+  })
+
+  it('merges keywords (boost-stripped) and keyterms into a single keyterm list on Nova-3', () => {
     const url = buildDeepgramUrl({
       keywords: ['Gandalf:5'],
       keyterms: ['ancient red dragon'],
     })
     const q = params(url)
-    expect(q.getAll('keywords')).toEqual(['Gandalf:5'])
-    expect(q.getAll('keyterms')).toEqual(['ancient red dragon'])
+    expect(q.has('keywords')).toBe(false)
+    // Order: keywords-derived first, then explicit keyterms — matches
+    // the order the builder collects them, and dedupe is case-insensitive
+    // so collisions across the two lists collapse safely.
+    expect(q.getAll('keyterm')).toEqual(['Gandalf', 'ancient red dragon'])
   })
 })
 
@@ -175,6 +200,8 @@ describe('buildDeepgramUrl — full production call shape', () => {
     expect(q.get('utterance_end_ms')).toBe('2500')
     expect(q.get('endpointing')).toBe('1000')
     expect(q.get('interim_results')).toBe('true') // auto-forced
-    expect(q.getAll('keywords')).toEqual(['Dax:5', 'Mumbley:5'])
+    // Nova-3 folds keywords into keyterm with :boost stripped.
+    expect(q.has('keywords')).toBe(false)
+    expect(q.getAll('keyterm')).toEqual(['Dax', 'Mumbley'])
   })
 })
