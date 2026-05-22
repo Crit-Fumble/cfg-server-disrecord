@@ -4,7 +4,7 @@
 import { resolveStandaloneConfig } from '../../src/config.js'
 
 const BASE_ENV = {
-  DISCORD_BOT_TOKEN: 'bot-token',
+  DISRECORD_DISCORD_TOKEN: 'bot-token',
 }
 
 const ORIG = process.env
@@ -32,7 +32,7 @@ describe('resolveStandaloneConfig', () => {
 
   it('throws when the bot token is missing', () => {
     setEnv({})
-    expect(() => resolveStandaloneConfig()).toThrow(/DISCORD_BOT_TOKEN/)
+    expect(() => resolveStandaloneConfig()).toThrow(/DISRECORD_DISCORD_TOKEN/)
   })
 
   it('treats an empty Deepgram key as record-only (undefined)', () => {

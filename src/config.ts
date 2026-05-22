@@ -205,7 +205,7 @@ export function resolveStandaloneConfig(): StandaloneConfig {
   }
 
   return {
-    discordToken: requireEnv('DISCORD_BOT_TOKEN'),
+    discordToken: requireEnv('DISRECORD_DISCORD_TOKEN'),
     deepgramKey,
     deepgramMode,
     deepgramModel: optionalEnv('DEEPGRAM_MODEL', 'nova-3'),
