@@ -106,6 +106,15 @@ export class SessionController {
    * Deepgram key) AND transcription is actually active for the session.
    */
   private transcriptionBilled = false
+  /**
+   * Flipped true the first time a transcript event arrives. Gates the
+   * transcription surcharge tick alongside {@link transcriptionBilled} — if
+   * the platform Deepgram grant fails (or any other reason transcription
+   * silently breaks), no captions ever flow and the user is NOT charged
+   * the surcharge. If transcription delivers at any point in the session,
+   * the full session bills at the surcharge rate (lenient: they got value).
+   */
+  private transcriptionDelivered = false
 
   constructor(params: SessionControllerParams) {
     this.params = params
@@ -308,7 +317,13 @@ export class SessionController {
       ctPerMinute: cfg.ctPerMinute,
       label: `Recording Server (${cfg.size}): ${suffix}`,
     })
-    if (this.transcriptionBilled && cfg.transcriptionCtPerMinute != null) {
+    // Transcription tick is gated on both INTENT (transcriptionBilled, set at
+    // start from `effectiveMode === 'platform'`) AND DELIVERY
+    // (transcriptionDelivered, flipped the first time a transcript event
+    // arrives). If the platform grant fails or Deepgram is otherwise broken,
+    // no transcripts flow, transcriptionDelivered stays false, and the
+    // surcharge is never posted — the user only pays server_uptime.
+    if (this.transcriptionBilled && this.transcriptionDelivered && cfg.transcriptionCtPerMinute != null) {
       void this.params.core.postBillingTick({
         resourceType: 'transcription',
         minutes,
@@ -414,6 +429,10 @@ export class SessionController {
   }
 
   private onTranscript(event: TranscriptFinalEvent): void {
+    // First delivered transcript flips the gate that lets the transcription
+    // surcharge bill. Set BEFORE pushing the caption so a tick that fires
+    // concurrently with the first event still sees the flag.
+    this.transcriptionDelivered = true
     this.captions.push({
       speakerName: event.speakerName,
       speakerId: event.speakerId,
