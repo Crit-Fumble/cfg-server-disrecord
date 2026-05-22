@@ -65,9 +65,12 @@ beforeEach(() => {
   ;(createDeepgramStream as jest.Mock).mockClear()
 })
 
+/** A token provider stub — recording-session never inspects the credential. */
+const fakeTokenProvider = jest.fn(() => ({ value: 'dg-test-key', scheme: 'Token' as const }))
+
 function defaultParams(overrides: Partial<ConstructorParameters<typeof RecordingSession>[0]> = {}) {
   return {
-    deepgramApiKey: 'dg-test-key',
+    deepgramTokenProvider: fakeTokenProvider,
     resolveSpeakerName: jest.fn(async (id: string) => `User-${id}`),
     onTranscriptFinal: jest.fn(),
     ...overrides,
@@ -223,8 +226,8 @@ describe('RecordingSession — transcript emission', () => {
 })
 
 describe('RecordingSession — transcription disabled', () => {
-  it('does not open a Deepgram stream when deepgramApiKey is null', async () => {
-    const sess = new RecordingSession(defaultParams({ deepgramApiKey: null }))
+  it('does not open a Deepgram stream when the token provider is null', async () => {
+    const sess = new RecordingSession(defaultParams({ deepgramTokenProvider: null }))
     await sess.onSpeakerStart('u7')
     expect(createDeepgramStream).not.toHaveBeenCalled()
   })

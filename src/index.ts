@@ -1,12 +1,13 @@
 /**
- * cfg-server-disrecord entrypoint.
+ * cfg-server-disrecord entrypoint — the recording skill server.
  *
- *   node dist/index.js serve    — unified recording container: own bot, own
- *                                 voice capture + mp3 mix + transcription,
- *                                 HTTP control API. Runs local-only, or
- *                                 CFG-hosted when CORE_SERVER_URL is set.
+ *   node dist/index.js serve    — recording skill server: borrows a bot
+ *                                 token to join voice, captures opus, mixes
+ *                                 mp3, transcribes, exposes an HTTP control
+ *                                 API. Runs local-only, or CFG-hosted when
+ *                                 CORE_SERVER_URL is set. No command surface.
  *   node dist/index.js <other>  — delegated to the `disrecord` CLI
- *                                 (register-commands / status / start / stop).
+ *                                 (status / start / stop).
  *
  * The Docker default CMD is `serve`.
  */
@@ -23,7 +24,7 @@ async function main(): Promise<void> {
     return
   }
 
-  // Everything else (register-commands / status / start / stop) → CLI.
+  // Everything else (status / start / stop) → CLI.
   const { runCli } = await import('./cli.js')
   await runCli(process.argv.slice(2))
 }

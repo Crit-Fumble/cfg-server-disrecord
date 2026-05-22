@@ -26,7 +26,7 @@ export interface StartRecordingRequest {
   voiceChannelId: string
   /** Defaults to the voice channel. */
   textChannelId?: string
-  /** Defaults to true. Ignored (forced false) when no Deepgram key is set. */
+  /** Defaults to true. Ignored (forced false) when transcription is disabled. */
   transcription?: boolean
   /** Discord user id of the invoker — pre-consented. */
   invokerUserId?: string
@@ -70,8 +70,12 @@ export class RecordingService {
     // the lock while we're joining voice.
     this.registry.reserve(recordingId, req.guildId)
 
+    // Transcription is on unless the session's Deepgram mode is 'disabled'
+    // (and the caller didn't opt out). Platform mode has no static key — the
+    // container mints grant tokens — so a missing `deepgramKey` no longer
+    // forces record-only; only mode='disabled' does.
     const transcription =
-      this.config.deepgramKey != null && (req.transcription ?? true)
+      this.config.deepgramMode !== 'disabled' && (req.transcription ?? true)
 
     const controller = new SessionController({
       recordingId,
@@ -80,6 +84,7 @@ export class RecordingService {
       voiceChannelId: req.voiceChannelId,
       textChannelId,
       transcription,
+      deepgramMode: this.config.deepgramMode,
       deepgramKey: this.config.deepgramKey ?? null,
       deepgramModel: this.config.deepgramModel,
       deepgramLanguage: this.config.deepgramLanguage,

@@ -14,6 +14,10 @@
  *   POST /api/v1/billing/uptime-tick
  *        Periodic + final CT billing tick.
  *
+ *   POST /api/v1/disrecord/deepgram-token
+ *        Mints a short-lived Deepgram grant token for platform-mode
+ *        transcription (the platform key never enters the container).
+ *
  * Blank-slate-boot contract: the client is constructed from the optional
  * {@link CfgHostedConfig}. When that config is `undefined` (no
  * `CORE_SERVER_URL`), every method is a clean, synchronous no-op — it never
@@ -47,10 +51,22 @@ export interface TranscriptPayload {
 }
 
 export interface BillingTickPayload {
-  resourceType: 'bot_container' | 'transcription'
+  /**
+   * `server_uptime` — recording skill-server container uptime, billed by
+   * instance size (the unified server-uptime axis).
+   * `transcription` — the optional live-transcription surcharge (platform
+   * Deepgram key only).
+   */
+  resourceType: 'server_uptime' | 'transcription'
   minutes: number
   ctPerMinute: number
   label: string
+}
+
+/** A minted Deepgram grant token + its TTL. */
+export interface DeepgramTokenResult {
+  accessToken: string
+  expiresIn: number
 }
 
 /** Empty policy used both as the no-op return and the unreachable-core fallback. */
@@ -121,6 +137,35 @@ export class CoreServerClient {
       }
     } catch (err) {
       this.logger?.warn({ err, speakerId: payload.speakerId }, 'transcript POST threw')
+    }
+  }
+
+  /**
+   * Fetch a short-lived Deepgram grant token for platform-mode transcription.
+   *
+   * Returns `null` when self-host (no `cfg`) or when core-server is
+   * unreachable / rejects the request. Callers fall back to record-only on a
+   * null — the platform key never enters the container, so there is no other
+   * credential to use. Throws nothing: a failure is a graceful null.
+   */
+  async fetchDeepgramToken(): Promise<DeepgramTokenResult | null> {
+    if (!this.cfg) return null
+    const url = this.url('/api/v1/disrecord/deepgram-token')
+    try {
+      const res = await fetch(url, { method: 'POST', headers: this.headers() })
+      if (!res.ok) {
+        this.logger?.warn({ status: res.status }, 'deepgram-token fetch non-2xx')
+        return null
+      }
+      const body = (await res.json()) as Partial<DeepgramTokenResult>
+      if (!body.accessToken) {
+        this.logger?.warn('deepgram-token response missing accessToken')
+        return null
+      }
+      return { accessToken: body.accessToken, expiresIn: body.expiresIn ?? 3600 }
+    } catch (err) {
+      this.logger?.warn({ err }, 'deepgram-token fetch threw')
+      return null
     }
   }
 

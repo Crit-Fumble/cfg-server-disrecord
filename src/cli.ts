@@ -1,23 +1,21 @@
 #!/usr/bin/env node
 /**
- * `disrecord` CLI — operate a standalone recording container.
+ * `disrecord` CLI — operate a recording skill-server container.
  *
  * Subcommands:
- *   serve              — boot the container (gateway + slash + control server)
- *   register-commands  — register /resesh slash commands globally (one-shot)
+ *   serve              — boot the container (gateway + control server)
  *   status [id]        — query the local control server
  *   start              — start a recording via the control server
  *   stop <id>          — stop a recording via the control server
  *
  * `status` / `start` / `stop` talk to the control server over HTTP at
  * `http://127.0.0.1:${CONTROL_PORT}`, forwarding `CONTROL_TOKEN` when set.
- * They are convenience wrappers — the same actions are available via
- * `/resesh` slash commands and the raw HTTP API.
+ * They are convenience wrappers over the raw HTTP control API — the
+ * container has no slash-command surface. A consuming bot that wants slash
+ * commands (e.g. ReSesh) drives the container over this same API.
  */
 
 import { logger } from './logger.js'
-import { resolveStandaloneConfig } from './config.js'
-import { registerCommands } from './discord/register-commands.js'
 
 function controlBase(): { url: string; token?: string } {
   const port = process.env.CONTROL_PORT ?? '8080'
@@ -33,14 +31,9 @@ async function controlFetch(path: string, init: RequestInit = {}): Promise<Respo
 }
 
 async function cmdServe(): Promise<void> {
-  const config = resolveStandaloneConfig()
+  const { resolveStandaloneConfig } = await import('./config.js')
   const { startStandalone } = await import('./standalone.js')
-  await startStandalone(config)
-}
-
-async function cmdRegisterCommands(): Promise<void> {
-  const config = resolveStandaloneConfig()
-  await registerCommands(config.discordToken, config.discordClientId, logger)
+  await startStandalone(resolveStandaloneConfig())
 }
 
 async function cmdStatus(id?: string): Promise<void> {
@@ -98,9 +91,6 @@ export async function runCli(argv: string[]): Promise<void> {
     case 'serve':
       await cmdServe()
       return
-    case 'register-commands':
-      await cmdRegisterCommands()
-      return
     case 'status':
       await cmdStatus(argv[1])
       return
@@ -112,12 +102,11 @@ export async function runCli(argv: string[]): Promise<void> {
       return
     default:
       process.stderr.write(
-        'Usage: disrecord <serve|register-commands|status|start|stop>\n' +
-          '  serve              boot the recording container\n' +
-          '  register-commands  register /resesh slash commands\n' +
-          '  status [id]        query active recordings\n' +
-          '  start              start a recording (START_GUILD_ID + START_VOICE_CHANNEL_ID)\n' +
-          '  stop <id>          stop a recording\n',
+        'Usage: disrecord <serve|status|start|stop>\n' +
+          '  serve        boot the recording skill-server container\n' +
+          '  status [id]  query active recordings\n' +
+          '  start        start a recording (START_GUILD_ID + START_VOICE_CHANNEL_ID)\n' +
+          '  stop <id>    stop a recording\n',
       )
       process.exitCode = sub ? 2 : 0
   }
