@@ -1,68 +1,114 @@
-# cfg-server-disrecord — DisRecord worker container
+# cfg-server-disrecord — unified Discord voice recording container
 
-The per-session worker container for the DisRecord backend kind: connects
-to the audio SSE stream that cfg-core-server publishes for an active
-recording, decodes opus, runs per-speaker Deepgram, and POSTs transcripts
-+ billing ticks back to core-server.
+One Docker image, two modes:
 
-- **Image**: `cfg-server-disrecord:local` (dev) / registry path (prod)
+- **`serve`** — the standalone unified recording container. Boots its own
+  Discord bot, joins voice on a `/resesh start` slash command, captures
+  opus, mixes an MP3, transcribes with a BYO Deepgram key, and posts a
+  Discord thread — with **zero** core-server involvement. Operate it via
+  Discord slash commands or a localhost HTTP control API.
+- **`worker`** — the legacy per-session worker. cfg-core-server spawns it,
+  it pulls opus over SSE, runs Deepgram, and POSTs transcripts + billing
+  back. Still fully supported; it is the Docker default `CMD`.
+
 - **License**: AGPL-3.0-only
-- **Discord app**: `1504164101553656028` (ReSesh — owned by cfg-core-server's
-  in-process gateway, not this container)
 
-## Where the orchestration lives
+## Self-host quickstart (`serve` mode)
 
-The always-on Discord WebSocket + voice-channel join + opus → SSE fan-out
-all live inside **cfg-core-server** under `services/disrecord/`. This repo
-contains only the per-session container that runs inside Docker once
-core-server has accepted a recording.
+You need a Discord bot and (optionally) a Deepgram API key.
 
-Earlier revisions of this repo shipped a separate `gateway` Fastify service;
-that got merged into core-server when the cross-service HTTP-bridge proved
-to be more complexity than the per-kind isolation was worth. See
-core-server's `services/disrecord/index.ts` for the orchestration entry
-point.
+1. **Create a Discord bot** at <https://discord.com/developers/applications>.
+   On the **Bot** tab, enable the **Server Members Intent** and **Message
+   Content Intent**. Copy the **bot token** and the **Application ID**.
+2. **Invite the bot** to your server with the `bot` + `applications.commands`
+   scopes and the **Connect**, **Speak**, **Send Messages**, and **Create
+   Public Threads** permissions.
+3. **Configure `.env`** — copy `.env.example` and fill in at least:
 
-## Auth
+   ```sh
+   DISRECORD_DISCORD_TOKEN=<bot token>
+   DISRECORD_DISCORD_CLIENT_ID=<application id>
+   DEEPGRAM_API_KEY=<deepgram key>   # omit for record-only (no transcript)
+   OUTPUT_DIR=/data/recordings
+   CONTROL_PORT=8080
+   # CONTROL_TOKEN=<random secret>   # optional bearer auth for the HTTP API
+   ```
 
-The worker holds zero long-lived credentials.
+4. **Register the slash commands** (one-shot — Discord caches them):
 
-`CORE_SERVER_TOKEN` is a per-session JWT minted by core-server at session
-start. It carries `scope='disrecord-worker'` + an `installationId` claim
-(= the `RecordingSession.id` for this session) and a short expiry. Same
-token gates:
+   ```sh
+   docker run --rm --env-file .env cfg-server-disrecord:local register-commands
+   ```
 
-- The SSE opus subscription: `GET ${CORE_SERVER_URL}/api/internal/disrecord/sessions/:installationId/audio`
-- The callback POSTs: `POST /api/v1/recording/transcripts`, `POST /api/v1/billing/uptime-tick`, `GET /api/v1/recording/session-policy/:installationId`
+5. **Run the container** in `serve` mode:
 
-No bearer secrets, no shared keys.
+   ```sh
+   docker run -d --name disrecord \
+     --env-file .env \
+     -p 127.0.0.1:8080:8080 \
+     -v disrecord-data:/data/recordings \
+     cfg-server-disrecord:local serve
+   ```
 
-## Charge model
+6. **Record.** Join a voice channel in Discord and run `/resesh start`.
+   Click **Allow Recording** on the consent prompt. Use `/resesh pause`,
+   `/resesh resume`, `/resesh status`, and `/resesh stop`. When you stop,
+   the bot mixes the MP3, generates a VTT caption track (when transcription
+   is on), posts them into a thread, and writes a copy to
+   `OUTPUT_DIR/<recordingId>/`.
 
-Per the platform's CT economy:
+### HTTP control API (localhost)
 
-- **Bot uptime**: CT/min by instance size (`nano` / `micro` / `small`).
-  Recording itself is included.
-- **Live Transcription** (optional):
-  - **Platform Deepgram key** → user pays extra CT for transcription minutes
-  - **BYO Deepgram key** → no transcription surcharge
+The `serve` container exposes a control API on `127.0.0.1:${CONTROL_PORT}`.
+When `CONTROL_TOKEN` is set, every `/v1/*` request must carry
+`Authorization: Bearer <token>`.
+
+```
+POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription? } → { recordingId }
+POST /v1/recordings/:id/pause  → 204
+POST /v1/recordings/:id/resume → 204
+POST /v1/recordings/:id/stop   → 202   (post-processing async)
+GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused }
+GET  /v1/recordings            → [ ... ]
+GET  /healthz                  → { ok, botReady, activeRecordings }
+```
+
+The bundled `disrecord` CLI wraps it: `disrecord status [id]`,
+`disrecord start` (reads `START_GUILD_ID` / `START_VOICE_CHANNEL_ID`),
+`disrecord stop <id>`.
+
+### One recording per server
+
+Discord allows a bot only one voice connection per server, so the
+container records **one session per guild** at a time. A second
+`/resesh start` (or `POST /v1/recordings`) for the same guild is rejected
+with a clear conflict error. Different servers record concurrently.
+
+## Charge model (CFG-hosted only)
+
+When CFG hosts the container (Phase 2), bot uptime is billed in CT/min and
+recordings upload to DO Spaces. In `serve` mode none of that applies — you
+bring your own bot and Deepgram key and pay Deepgram directly.
 
 ## Development
 
 ```sh
 npm install
-npm run dev   # tsx watch on src/index.ts worker
+npm run dev          # tsx watch — worker mode
+npm run dev:serve    # tsx watch — serve mode
 npm test
+npm run typecheck
+npm run build
 ```
 
-Locally the worker is normally not run by hand — core-server's
-worker-spawner starts a container per session. Run it manually only when
-debugging the SSE consumer or Deepgram integration against a running
-core-server; the `.env.example` shows the per-session env to fill in.
+`@discordjs/opus` ships a native binding. Local installs may need
+`npm rebuild @discordjs/opus`; unit tests mock it so they run without it.
 
-Pre-push hook runs the full test suite (cfg-* convention). No `--no-verify` —
-fix the test instead.
+Pre-push hook runs the full test suite (cfg-* convention). No `--no-verify`.
 
 ## Tracking
 
-cfg-core-dev-tools#117 (cfg-server-disrecord epic).
+cfg-core-dev-tools#117 (cfg-server-disrecord epic). Unified-recording
+container: Phase 1 (this branch) ships the standalone `serve` mode;
+Phase 2 moves the gateway/voice/mixing out of core-server and adds the
+phone-home billing/Spaces/consent-sync paths.

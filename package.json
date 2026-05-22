@@ -11,8 +11,12 @@
   },
   "homepage": "https://github.com/Crit-Fumble/cfg-server-disrecord",
   "main": "./dist/index.js",
+  "bin": {
+    "disrecord": "./dist/cli.js"
+  },
   "scripts": {
     "dev": "tsx watch --env-file=.env --clear-screen=false src/index.ts worker",
+    "dev:serve": "tsx watch --env-file=.env --clear-screen=false src/index.ts serve",
     "build": "tsc && tsc-alias -f",
     "start": "node dist/index.js worker",
     "typecheck": "tsc --noEmit",
@@ -23,8 +27,16 @@
     "prepare": "husky"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1044.0",
+    "@aws-sdk/lib-storage": "^3.1044.0",
     "@discordjs/opus": "^0.10.0",
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.26.4",
+    "fastify": "^5.8.5",
+    "jose": "^6.1.0",
+    "libsodium-wrappers": "^0.7.15",
     "pino": "^10.1.0",
+    "tweetnacl": "^1.0.3",
     "ws": "^8.19.0"
   },
   "devDependencies": {

@@ -57,6 +57,66 @@ function optionalEnv(name: string, fallback: string): string {
   return process.env[name] ?? fallback
 }
 
+/**
+ * Standalone (`serve` mode) configuration — env-driven.
+ *
+ * Phase 1 of the unified-recording-container work: the container boots its
+ * own Discord bot, joins voice, captures opus, mixes mp3, and (optionally)
+ * transcribes — with ZERO core-server involvement. This is a separate
+ * resolver from `resolveConfig()` (the legacy `worker` mode) so the two
+ * modes don't share env validation; both ship in the same image.
+ *
+ * Every value here is operator-supplied at `docker run` time. The bot
+ * token is the only long-lived credential and never leaves the container.
+ */
+export interface StandaloneConfig {
+  /** ReSesh-style Discord bot token. The container logs in with this at boot. */
+  discordToken: string
+  /** Discord application (client) id — used for slash-command registration. */
+  discordClientId: string
+  /**
+   * Deepgram API key. Absent ⇒ record-only mode: the container still
+   * captures + mixes mp3, it just doesn't transcribe (no VTT, no thread
+   * transcript). BYO key — the operator pays Deepgram directly.
+   */
+  deepgramKey?: string
+  /** Deepgram model. Defaults to 'nova-3'. */
+  deepgramModel: string
+  /** Deepgram transcription language. Defaults to 'en'. */
+  deepgramLanguage: string
+  /** Local directory finalized mp3 + VTT land in. Default `/data/recordings`. */
+  outputDir: string
+  /** HTTP control-server port. Default 8080. */
+  controlPort: number
+  /**
+   * Optional bearer token for the HTTP control API. When set, every
+   * control request must carry `Authorization: Bearer <token>`. When
+   * unset, the control server is unauthenticated (it binds 127.0.0.1
+   * only in Phase 1, so this is acceptable for single-host self-host).
+   */
+  controlToken?: string
+  logLevel: string
+}
+
+export function resolveStandaloneConfig(): StandaloneConfig {
+  const controlPortRaw = process.env.CONTROL_PORT
+  const controlPort = controlPortRaw ? Number(controlPortRaw) : 8080
+  if (!Number.isInteger(controlPort) || controlPort <= 0 || controlPort > 65535) {
+    throw new Error(`Invalid CONTROL_PORT: ${controlPortRaw}`)
+  }
+  return {
+    discordToken: requireEnv('DISRECORD_DISCORD_TOKEN'),
+    discordClientId: requireEnv('DISRECORD_DISCORD_CLIENT_ID'),
+    deepgramKey: process.env.DEEPGRAM_API_KEY || undefined,
+    deepgramModel: optionalEnv('DEEPGRAM_MODEL', 'nova-3'),
+    deepgramLanguage: optionalEnv('DEEPGRAM_LANGUAGE', 'en'),
+    outputDir: optionalEnv('OUTPUT_DIR', '/data/recordings'),
+    controlPort,
+    controlToken: process.env.CONTROL_TOKEN || undefined,
+    logLevel: optionalEnv('LOG_LEVEL', 'info'),
+  }
+}
+
 export function resolveConfig(): WorkerConfig {
   const size = optionalEnv('DISRECORD_SIZE', 'nano') as WorkerConfig['size']
   if (size !== 'nano' && size !== 'micro' && size !== 'small') {
