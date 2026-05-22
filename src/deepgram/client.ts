@@ -4,8 +4,16 @@
  * One instance per speaker per transcription session. Accepts raw PCM audio
  * buffers and emits transcript events.
  *
+ * The client is constructed with a **token provider** rather than a static
+ * key. The provider is called once per `connect()` (i.e. per per-speaker
+ * websocket open) and returns the credential to authenticate that websocket:
+ *   - platform mode — the provider fetches a fresh short-lived grant token
+ *     from core-server (the platform key never enters the container).
+ *   - byok mode     — the provider returns the static user-supplied key.
+ * A provider that returns `null` aborts the connection (record-only).
+ *
  * Usage:
- *   const stream = createDeepgramStream({ apiKey }, { model: 'nova-3', sampleRate: 48000 })
+ *   const stream = createDeepgramStream(() => myKeyOrToken, { model: 'nova-3' })
  *   stream.on('transcript', (ev) => logger.info(ev.transcript))
  *   stream.send(pcmBuffer)
  *   await stream.close()
@@ -14,6 +22,24 @@
 import { EventEmitter } from 'node:events'
 import { WebSocket } from 'ws'
 import type { DeepgramStreamOptions, DeepgramResult, DeepgramUtteranceEnd, TranscriptEvent } from './types.js'
+
+/**
+ * A Deepgram credential plus its `Authorization` scheme. Static API keys
+ * authenticate as `Token <key>`; short-lived grant tokens (platform mode)
+ * authenticate as `Bearer <token>`.
+ */
+export interface DeepgramCredential {
+  value: string
+  scheme: 'Token' | 'Bearer'
+}
+
+/**
+ * Resolves the credential used to authenticate a Deepgram websocket. Called
+ * once per `connect()`. May be async (platform mode mints a grant token over
+ * HTTP). Returning `null` means "no credential available" — `connect()`
+ * rejects and the speaker isn't transcribed.
+ */
+export type DeepgramTokenProvider = () => DeepgramCredential | null | Promise<DeepgramCredential | null>
 
 const DEEPGRAM_WS_URL = 'wss://api.deepgram.com/v1/listen'
 
@@ -167,21 +193,39 @@ export class DeepgramStreamingClient extends EventEmitter {
   private connectBufferBytes = 0
 
   constructor(
-    private readonly apiKey: string,
+    private readonly tokenProvider: DeepgramTokenProvider,
     private readonly options: DeepgramStreamOptions = {},
   ) {
     super()
   }
 
-  /** Connect to Deepgram WebSocket. Resolves when the connection is open. */
+  /**
+   * Connect to Deepgram WebSocket. Resolves when the connection is open.
+   *
+   * The token provider is invoked here, once per connect — platform mode
+   * mints a fresh grant token, byok mode returns the static key. A provider
+   * that returns `null` (or throws) rejects the connection so the caller can
+   * fall back to record-only for that speaker.
+   */
   async connect(): Promise<void> {
     if (this._closed) throw new Error('DeepgramStreamingClient is closed')
     if (this.ws) return
 
+    let credential: DeepgramCredential | null
+    try {
+      credential = await this.tokenProvider()
+    } catch (err) {
+      throw err instanceof Error ? err : new Error(String(err))
+    }
+    if (!credential) {
+      throw new Error('Deepgram token provider returned no credential')
+    }
+
     const url = buildDeepgramUrl(this.options)
+    const authHeader = `${credential.scheme} ${credential.value}`
 
     return new Promise<void>((resolve, reject) => {
-      this.ws = new WebSocket(url, { headers: { Authorization: `Token ${this.apiKey}` } })
+      this.ws = new WebSocket(url, { headers: { Authorization: authHeader } })
 
       this.ws.on('open', () => {
         this.startKeepalive()

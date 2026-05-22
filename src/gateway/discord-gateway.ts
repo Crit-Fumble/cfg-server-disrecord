@@ -1,18 +1,19 @@
 /**
- * Discord Gateway — discord.js Client for the standalone (`serve` mode)
- * recording container.
+ * Discord Gateway — a Discord voice connection that borrows a bot's token.
  *
- * Ported from cfg-core-server's `services/disrecord/disrecord-gateway.ts`.
- * The crucial difference: in core-server the gateway was lazy (logged in
- * on first session, destroyed when idle). In the standalone container the
- * bot logs in at boot and stays connected for the container's lifetime —
- * a self-hosted recording container IS the bot, so there is nothing to be
- * lazy about.
+ * This is NOT the container's own bot. The container is a skill server: it
+ * borrows a bot token (the operator's, self-host; the ReSesh bot's,
+ * CFG-hosted) purely so it can join voice and capture frames on that bot's
+ * behalf. The login is required because `joinVoiceChannel` needs
+ * `guild.voiceAdapterCreator`, which only a connected client exposes. The
+ * client logs in at boot and stays connected for the container's lifetime.
  *
  * Intents — Guilds + GuildVoiceStates (join voice, receive frames) plus
  * GuildMembers (privileged, display-name resolution) and MessageContent /
- * GuildMessages (consent buttons + slash interactions). Both privileged
- * intents must be toggled on in the bot's Developer Portal Bot tab.
+ * GuildMessages. The latter two stay because `consent-manager.ts` still
+ * handles in-Discord consent-button clicks — consent is intrinsic to the
+ * recording skill, the one documented exception to "not a bot". Both
+ * privileged intents must be toggled on in the bot's Developer Portal.
  */
 
 import { Client, GatewayIntentBits } from 'discord.js'

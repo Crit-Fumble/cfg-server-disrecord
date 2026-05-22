@@ -4,8 +4,7 @@
 import { resolveStandaloneConfig } from '../../src/config.js'
 
 const BASE_ENV = {
-  DISRECORD_DISCORD_TOKEN: 'bot-token',
-  DISRECORD_DISCORD_CLIENT_ID: '1504164101553656028',
+  DISCORD_BOT_TOKEN: 'bot-token',
 }
 
 const ORIG = process.env
@@ -19,11 +18,10 @@ function setEnv(vars: Record<string, string>): void {
 }
 
 describe('resolveStandaloneConfig', () => {
-  it('resolves required vars + Phase 1 defaults', () => {
+  it('resolves required vars + serve-mode defaults', () => {
     setEnv(BASE_ENV)
     const c = resolveStandaloneConfig()
     expect(c.discordToken).toBe('bot-token')
-    expect(c.discordClientId).toBe('1504164101553656028')
     expect(c.deepgramKey).toBeUndefined()
     expect(c.deepgramModel).toBe('nova-3')
     expect(c.deepgramLanguage).toBe('en')
@@ -33,13 +31,8 @@ describe('resolveStandaloneConfig', () => {
   })
 
   it('throws when the bot token is missing', () => {
-    setEnv({ DISRECORD_DISCORD_CLIENT_ID: 'x' })
-    expect(() => resolveStandaloneConfig()).toThrow(/DISRECORD_DISCORD_TOKEN/)
-  })
-
-  it('throws when the client id is missing', () => {
-    setEnv({ DISRECORD_DISCORD_TOKEN: 'x' })
-    expect(() => resolveStandaloneConfig()).toThrow(/DISRECORD_DISCORD_CLIENT_ID/)
+    setEnv({})
+    expect(() => resolveStandaloneConfig()).toThrow(/DISCORD_BOT_TOKEN/)
   })
 
   it('treats an empty Deepgram key as record-only (undefined)', () => {

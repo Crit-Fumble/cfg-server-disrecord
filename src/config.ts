@@ -1,9 +1,10 @@
 /**
  * cfg-server-disrecord configuration — env-driven.
  *
- * The container runs in `serve` mode: it boots its own Discord bot, joins
- * voice, captures opus, mixes mp3, and (optionally) transcribes. It runs
- * local-only by default, or CFG-hosted when `CORE_SERVER_URL` is set.
+ * The container runs in `serve` mode: it opens a Discord voice connection
+ * using a bot token supplied by the operator (self-host) or the consuming
+ * bot (CFG-hosted), captures opus, mixes mp3, and (optionally) transcribes.
+ * It runs local-only by default, or CFG-hosted when `CORE_SERVER_URL` is set.
  *
  * The bot token is the only long-lived credential and never leaves the
  * container; CFG-hosted per-session JWTs die with the container.
@@ -22,26 +23,40 @@ function optionalEnv(name: string, fallback: string): string {
 /**
  * Standalone (`serve` mode) configuration — env-driven.
  *
- * Phase 1 of the unified-recording-container work: the container boots its
- * own Discord bot, joins voice, captures opus, mixes mp3, and (optionally)
- * transcribes — with ZERO core-server involvement. This is a separate
- * resolver from `resolveConfig()` (the legacy `worker` mode) so the two
- * modes don't share env validation; both ship in the same image.
+ * The recording skill server: the container opens a Discord voice
+ * connection with a borrowed bot token, joins voice, captures opus, mixes
+ * mp3, and (optionally) transcribes — with ZERO core-server involvement in
+ * self-host mode.
  *
  * Every value here is operator-supplied at `docker run` time. The bot
  * token is the only long-lived credential and never leaves the container.
  */
 export interface StandaloneConfig {
-  /** ReSesh-style Discord bot token. The container logs in with this at boot. */
+  /**
+   * Discord bot token the container logs in with at boot. Bot-agnostic —
+   * self-host supplies their own bot's token; CFG-hosted injects the
+   * ReSesh bot's token. Used only to join voice (no command surface).
+   */
   discordToken: string
-  /** Discord application (client) id — used for slash-command registration. */
-  discordClientId: string
   /**
    * Deepgram API key. Absent ⇒ record-only mode: the container still
    * captures + mixes mp3, it just doesn't transcribe (no VTT, no thread
-   * transcript). BYO key — the operator pays Deepgram directly.
+   * transcript). For `deepgramMode='byok'` this is the static key used
+   * directly. For `'platform'` this is absent — the container mints
+   * short-lived grant tokens from core-server instead.
    */
   deepgramKey?: string
+  /**
+   * Deepgram credential mode:
+   *   platform — CFG-hosted with the platform key. The container fetches a
+   *              short-lived grant token from core-server per websocket open.
+   *   byok     — use `deepgramKey` directly (self-host, or a CFG user key).
+   *   disabled — no transcription (record-only).
+   * Resolved from the `DEEPGRAM_MODE` env var; when unset it is inferred —
+   * `byok` if `DEEPGRAM_API_KEY` is present, `disabled` otherwise — so a
+   * self-host operator never has to set it explicitly.
+   */
+  deepgramMode: 'platform' | 'byok' | 'disabled'
   /** Deepgram model. Defaults to 'nova-3'. */
   deepgramModel: string
   /** Deepgram transcription language. Defaults to 'en'. */
@@ -176,10 +191,23 @@ export function resolveStandaloneConfig(): StandaloneConfig {
   if (!Number.isInteger(controlPort) || controlPort <= 0 || controlPort > 65535) {
     throw new Error(`Invalid CONTROL_PORT: ${controlPortRaw}`)
   }
+  // Deepgram mode: explicit DEEPGRAM_MODE wins; otherwise infer from whether
+  // a static key is present (self-host operators never set DEEPGRAM_MODE).
+  const deepgramKey = process.env.DEEPGRAM_API_KEY || undefined
+  const rawMode = process.env.DEEPGRAM_MODE
+  let deepgramMode: 'platform' | 'byok' | 'disabled'
+  if (rawMode === 'platform' || rawMode === 'byok' || rawMode === 'disabled') {
+    deepgramMode = rawMode
+  } else if (rawMode !== undefined && rawMode !== '') {
+    throw new Error(`Invalid DEEPGRAM_MODE: ${rawMode}`)
+  } else {
+    deepgramMode = deepgramKey ? 'byok' : 'disabled'
+  }
+
   return {
-    discordToken: requireEnv('DISRECORD_DISCORD_TOKEN'),
-    discordClientId: requireEnv('DISRECORD_DISCORD_CLIENT_ID'),
-    deepgramKey: process.env.DEEPGRAM_API_KEY || undefined,
+    discordToken: requireEnv('DISCORD_BOT_TOKEN'),
+    deepgramKey,
+    deepgramMode,
     deepgramModel: optionalEnv('DEEPGRAM_MODEL', 'nova-3'),
     deepgramLanguage: optionalEnv('DEEPGRAM_LANGUAGE', 'en'),
     outputDir: optionalEnv('OUTPUT_DIR', '/data/recordings'),

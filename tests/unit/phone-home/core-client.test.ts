@@ -53,7 +53,13 @@ describe('CoreServerClient — self-host (no CFG config)', () => {
 
   it('postBillingTick is a no-op and never calls fetch', async () => {
     const client = new CoreServerClient(undefined, logger)
-    await client.postBillingTick({ resourceType: 'bot_container', minutes: 1, ctPerMinute: 13, label: 'x' })
+    await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, ctPerMinute: 13, label: 'x' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('fetchDeepgramToken returns null and never calls fetch (self-host record-only)', async () => {
+    const client = new CoreServerClient(undefined, logger)
+    expect(await client.fetchDeepgramToken()).toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 })
@@ -91,13 +97,39 @@ describe('CoreServerClient — CFG-hosted', () => {
   it('postBillingTick POSTs the installationId + payload', async () => {
     fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }))
     const client = new CoreServerClient(HOSTED, logger)
-    await client.postBillingTick({ resourceType: 'bot_container', minutes: 2.5, ctPerMinute: 13, label: 'x' })
+    await client.postBillingTick({ resourceType: 'server_uptime', minutes: 2.5, ctPerMinute: 13, label: 'x' })
     const [url, opts] = fetchSpy.mock.calls[0]
     expect(String(url)).toBe('http://core:3001/api/v1/billing/uptime-tick')
     expect(JSON.parse((opts as RequestInit).body as string)).toMatchObject({
       installationId: 'inst-1',
       minutes: 2.5,
+      resourceType: 'server_uptime',
     })
+  })
+
+  it('fetchDeepgramToken POSTs to the deepgram-token route and returns the grant', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ accessToken: 'grant-abc', expiresIn: 3600 }), { status: 200 }),
+    )
+    const client = new CoreServerClient(HOSTED, logger)
+    const grant = await client.fetchDeepgramToken()
+    expect(grant).toEqual({ accessToken: 'grant-abc', expiresIn: 3600 })
+    const [url, opts] = fetchSpy.mock.calls[0]
+    expect(String(url)).toBe('http://core:3001/api/v1/disrecord/deepgram-token')
+    expect((opts as RequestInit).method).toBe('POST')
+    expect((opts as RequestInit).headers).toMatchObject({ authorization: 'Bearer jwt-token' })
+  })
+
+  it('fetchDeepgramToken returns null on a non-2xx (graceful record-only fallback)', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 403 }))
+    const client = new CoreServerClient(HOSTED, logger)
+    expect(await client.fetchDeepgramToken()).toBeNull()
+  })
+
+  it('fetchDeepgramToken returns null when core-server is unreachable', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'))
+    const client = new CoreServerClient(HOSTED, logger)
+    expect(await client.fetchDeepgramToken()).toBeNull()
   })
 
   it('postTranscript swallows a non-2xx response', async () => {

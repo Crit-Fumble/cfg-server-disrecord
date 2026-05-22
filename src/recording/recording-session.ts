@@ -13,7 +13,7 @@
  * class's onSpeakerStart/onSpeakerData/onSpeakerEnd methods.
  */
 
-import { createDeepgramStream, type DeepgramStreamingClient } from '../deepgram/index.js'
+import { createDeepgramStream, type DeepgramStreamingClient, type DeepgramTokenProvider } from '../deepgram/index.js'
 import type { DeepgramWord } from '../deepgram/types.js'
 import type { Logger } from '../logger.js'
 
@@ -44,8 +44,12 @@ export interface TranscriptFinalEvent {
 }
 
 export interface RecordingSessionParams {
-  /** Deepgram API key. Null disables transcription entirely. */
-  deepgramApiKey: string | null
+  /**
+   * Deepgram token provider — resolves the websocket credential per speaker
+   * (platform mints a grant token, byok returns the static key). Null
+   * disables transcription entirely (record-only).
+   */
+  deepgramTokenProvider: DeepgramTokenProvider | null
   /** Defaults to 'nova-3'. */
   deepgramModel?: string
   /** Defaults to 'en'. */
@@ -75,7 +79,7 @@ export class RecordingSession {
    */
   public paused = false
 
-  private readonly deepgramApiKey: string | null
+  private readonly deepgramTokenProvider: DeepgramTokenProvider | null
   private readonly deepgramModel: string
   private readonly language: string
   private readonly keywords: string[]
@@ -118,7 +122,7 @@ export class RecordingSession {
   private sessionStartedAtMs: number | null = null
 
   constructor(params: RecordingSessionParams) {
-    this.deepgramApiKey = params.deepgramApiKey
+    this.deepgramTokenProvider = params.deepgramTokenProvider
     this.deepgramModel = params.deepgramModel ?? 'nova-3'
     this.language = params.language ?? 'en'
     this.keywords = params.keywords ?? []
@@ -172,15 +176,15 @@ export class RecordingSession {
       return
     }
 
-    // No Deepgram key → transcription is disabled for this session.
+    // No token provider → transcription is disabled for this session.
     // Treat consenters as a no-op (audio still captured upstream for the
     // mixdown / recording-only path; we just don't transcribe).
-    if (!this.deepgramApiKey) return
+    if (!this.deepgramTokenProvider) return
 
     const existing = this.speakerStreams.get(userId)
     if (existing && !existing.closed) return
 
-    const deepgramStream = createDeepgramStream(this.deepgramApiKey, {
+    const deepgramStream = createDeepgramStream(this.deepgramTokenProvider, {
       model: this.deepgramModel,
       language: this.language,
       encoding: 'linear16',

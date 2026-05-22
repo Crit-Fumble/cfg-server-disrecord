@@ -59,14 +59,15 @@ jest.mock('ws', () => {
 })
 
 function makeClient(): DeepgramStreamingClient {
-  return new DeepgramStreamingClient('test-key', { model: 'nova-3' })
+  return new DeepgramStreamingClient(() => ({ value: 'test-key', scheme: 'Token' }), { model: 'nova-3' })
 }
 
 /** Drive the connect() promise to resolved state. */
 async function connectAndOpen(client: DeepgramStreamingClient): Promise<void> {
   const p = client.connect()
-  // Microtask tick so the WS constructor + handlers register before we open.
-  await Promise.resolve()
+  // Spin the microtask queue so the (async) token provider resolves and the
+  // WS constructor + handlers register before we open.
+  for (let i = 0; i < 5; i++) await Promise.resolve()
   mockWsInstance.open()
   await p
 }

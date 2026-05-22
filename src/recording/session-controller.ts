@@ -21,6 +21,7 @@ import type { Client } from 'discord.js'
 import { VoiceCapture } from '../gateway/voice-capture.js'
 import { PcmCapture } from './pcm-capture.js'
 import { RecordingSession, type TranscriptFinalEvent } from './recording-session.js'
+import { buildDeepgramTokenProvider } from '../deepgram/index.js'
 import { ConsentManager } from '../consent/consent-manager.js'
 import { processRecording } from './post-process.js'
 import { createRecordingThread, postRecording, tempDirOf } from '../discord/thread-poster.js'
@@ -48,7 +49,12 @@ export interface SessionControllerParams {
   textChannelId: string
   /** Whether live transcription is enabled. */
   transcription: boolean
-  /** Deepgram API key. Null disables transcription regardless of `transcription`. */
+  /**
+   * Deepgram credential mode. `platform` mints grant tokens from core-server;
+   * `byok` uses `deepgramKey` directly; `disabled` ⇒ record-only.
+   */
+  deepgramMode: 'platform' | 'byok' | 'disabled'
+  /** Static Deepgram key — used only for `deepgramMode='byok'`. */
   deepgramKey: string | null
   deepgramModel: string
   deepgramLanguage: string
@@ -130,9 +136,19 @@ export class SessionController {
       logger: this.logger,
     })
 
-    const deepgramKey = p.transcription ? p.deepgramKey : null
+    // Build the Deepgram token provider for this session. When transcription
+    // is off for the session the mode collapses to 'disabled' ⇒ null
+    // provider ⇒ record-only. Platform mode mints short-lived grant tokens
+    // from core-server per per-speaker websocket; byok uses the static key.
+    const effectiveMode = p.transcription ? p.deepgramMode : 'disabled'
+    const tokenProvider = buildDeepgramTokenProvider({
+      mode: effectiveMode,
+      staticKey: p.deepgramKey ?? undefined,
+      core: p.core,
+      logger: this.logger,
+    })
     this.session = new RecordingSession({
-      deepgramApiKey: deepgramKey,
+      deepgramTokenProvider: tokenProvider,
       deepgramModel: p.deepgramModel,
       language: p.deepgramLanguage,
       consentedUserIds: this.consent.consentedIds(),
@@ -174,12 +190,13 @@ export class SessionController {
     // The separate `transcription` surcharge tick fires only when the
     // platform Deepgram key is in use (`transcriptionCtPerMinute` set) AND
     // transcription is actually running for this session. BYOK or disabled
-    // transcription ⇒ container uptime only, no surcharge.
-    this.transcriptionBilled = p.cfg?.transcriptionCtPerMinute != null && deepgramKey != null
+    // transcription ⇒ server uptime only, no surcharge.
+    this.transcriptionBilled =
+      p.cfg?.transcriptionCtPerMinute != null && effectiveMode === 'platform'
     if (p.cfg) this.startBillingTimer()
 
     this.logger.info(
-      { recordingId: this.recordingId, guildId: this.guildId, transcription: deepgramKey != null },
+      { recordingId: this.recordingId, guildId: this.guildId, transcription: tokenProvider != null },
       'recording session started',
     )
   }
@@ -213,9 +230,10 @@ export class SessionController {
    * paused we slide `lastBillingTickAt` forward so the user isn't billed
    * for the paused window (ported from the legacy `worker.ts` cadence).
    *
-   * Two ticks ride the SAME cadence: the `bot_container` uptime tick (always,
-   * when CFG-hosted) and the `transcription` surcharge tick (only when this
-   * session is on the platform Deepgram key — see `transcriptionBilled`).
+   * Two ticks ride the SAME cadence: the `server_uptime` tick (always, when
+   * CFG-hosted — the skill-server container's by-instance-size uptime) and
+   * the `transcription` surcharge tick (only when this session is on the
+   * platform Deepgram key — see `transcriptionBilled`).
    */
   private startBillingTimer(): void {
     const cfg = this.params.cfg
@@ -249,16 +267,17 @@ export class SessionController {
 
   /**
    * Post the billing tick(s) for `minutes` of active (non-paused) recording.
-   * Always posts the `bot_container` uptime tick; additionally posts a
-   * separate itemized `transcription` surcharge tick when this session runs
-   * on the platform Deepgram key (`transcriptionBilled`).
+   * Always posts the `server_uptime` tick (skill-server container uptime,
+   * billed by instance size); additionally posts a separate itemized
+   * `transcription` surcharge tick when this session runs on the platform
+   * Deepgram key (`transcriptionBilled`).
    */
   private postBillingTicks(minutes: number, final: boolean): void {
     const cfg = this.params.cfg
     if (!cfg) return
     const suffix = final ? `final ${minutes.toFixed(1)} min` : `${minutes.toFixed(1)} min`
     void this.params.core.postBillingTick({
-      resourceType: 'bot_container',
+      resourceType: 'server_uptime',
       minutes,
       ctPerMinute: cfg.ctPerMinute,
       label: `Recording Server (${cfg.size}): ${suffix}`,

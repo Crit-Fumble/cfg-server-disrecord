@@ -61,7 +61,15 @@ jest.mock('ws', () => {
 // ---------------------------------------------------------------------------
 
 function createClient(): DeepgramStreamingClient {
-  return new DeepgramStreamingClient('test-api-key')
+  return new DeepgramStreamingClient(() => ({ value: 'test-api-key', scheme: 'Token' }))
+}
+
+/**
+ * Spin the microtask queue so `connect()`'s awaited token provider resolves
+ * and the WebSocket mock instance is constructed before the test drives it.
+ */
+async function flushTokenProvider(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve()
 }
 
 /** Call close() and advance fake timers so the internal 3s timeout resolves. */
@@ -105,6 +113,7 @@ describe('DeepgramStreamingClient — keepalive timer cleanup (#236)', () => {
   it('starts keepalive timer on connect', async () => {
     const client = createClient()
     const connecting = client.connect()
+    await flushTokenProvider()
     mockWsInstance.open()
     await connecting
 
@@ -119,6 +128,7 @@ describe('DeepgramStreamingClient — keepalive timer cleanup (#236)', () => {
     const client = createClient()
     client.on('error', () => {}) // prevent unhandled
     const connecting = client.connect()
+    await flushTokenProvider()
     mockWsInstance.open()
     await connecting
 
@@ -132,6 +142,7 @@ describe('DeepgramStreamingClient — keepalive timer cleanup (#236)', () => {
   it('clears timer on server-initiated close', async () => {
     const client = createClient()
     const connecting = client.connect()
+    await flushTokenProvider()
     mockWsInstance.open()
     await connecting
 
@@ -146,6 +157,7 @@ describe('DeepgramStreamingClient — keepalive timer cleanup (#236)', () => {
     const client = createClient()
     client.on('error', () => {}) // prevent unhandled rejection
     const connecting = client.connect()
+    await flushTokenProvider()
     mockWsInstance.open()
     await connecting
 
@@ -161,6 +173,7 @@ describe('DeepgramStreamingClient — keepalive timer cleanup (#236)', () => {
     const client = createClient()
     client.on('error', () => {})
     const connecting = client.connect().catch(() => {})
+    await flushTokenProvider()
     // Error fires before open — keepalive was never started, but
     // stopKeepalive is still called defensively and must not throw.
     mockWsInstance.triggerError('handshake failed')
@@ -174,6 +187,7 @@ describe('DeepgramStreamingClient — keepalive timer cleanup (#236)', () => {
   it('no pending timers remain after open + close cycle', async () => {
     const client = createClient()
     const connecting = client.connect()
+    await flushTokenProvider()
     mockWsInstance.open()
     await connecting
 
@@ -192,6 +206,7 @@ describe('DeepgramStreamingClient — keepalive timer cleanup (#236)', () => {
   it('close() is idempotent — calling twice does not throw', async () => {
     const client = createClient()
     const connecting = client.connect()
+    await flushTokenProvider()
     mockWsInstance.open()
     await connecting
 
