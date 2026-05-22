@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7
 #
-# cfg-server-disrecord — per-session DisRecord worker container.
+# cfg-server-disrecord — unified Discord voice recording container.
 #
-# Image is spawned by cfg-core-server's worker-spawner (one container per
-# active recording session). Connects to core-server's SSE for opus audio,
-# decodes opus → PCM, runs per-speaker Deepgram, POSTs transcripts +
-# billing ticks back. Exits when the session ends.
+# One `serve` mode: own bot, own voice capture + mp3 mix + transcription,
+# HTTP control API. Runs local-only, or CFG-hosted when CORE_SERVER_URL is
+# set (core-server spawns it and proxies the control API). Operate via:
+#   docker run -p 127.0.0.1:8080:8080 --env-file .env <img> serve
 #
 # Private @crit-fumble/* packages from GitHub Packages (per .npmrc) need a
 # GitHub token at install time. Pass it as a BuildKit secret named `npmrc`:
@@ -53,15 +53,27 @@ RUN npm run build
 # ── Stage 3: runtime ─────────────────────────────────────────────────────────
 FROM base AS runtime
 
+# ffmpeg + ffprobe are required for the mp3 mix, silence trim, and split steps.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    rm -f /etc/apt/apt.conf.d/docker-clean && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ffmpeg ca-certificates
+
 COPY --from=deps    /app/node_modules ./node_modules
 COPY --from=builder /app/dist          ./dist
 COPY --from=builder /app/package.json  ./package.json
 
 ENV NODE_ENV=production
 
-# Worker accepts no inbound HTTP (everything is outbound to core-server),
-# so no EXPOSE / HEALTHCHECK is needed — health is implicit via the SSE
-# subscription staying open from core-server's side.
+# The HTTP control server runs on this port (default 8080). Local-only it
+# binds 127.0.0.1 — publish it with `-p 127.0.0.1:8080:8080`; CFG-hosted it
+# binds 0.0.0.0 with JWT auth.
+EXPOSE 8080
+
+# Finalized recordings land here — mount a volume so they survive the
+# container: `-v disrecord-data:/data/recordings`.
+VOLUME ["/data/recordings"]
 
 ENTRYPOINT ["node", "dist/index.js"]
-CMD ["worker"]
+CMD ["serve"]
