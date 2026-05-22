@@ -127,11 +127,19 @@ export class ConsentManager {
   }
 
   /**
-   * Post the session-start announcement in the destination channel. This is
-   * the "ping" the invoker sees so they know recording is live, with a link
-   * to the live-transcript thread when one was created. Carries NO consent
-   * buttons — the invoker is auto-consented at session start, and other
-   * members get their own consent prompts via {@link promptInitial} /
+   * Post the session-start announcement INSIDE the recording thread (when
+   * one was created). Discord drops its own "[bot] started a thread: ..."
+   * system message in the parent channel automatically; the explicit
+   * announcement in the parent would just duplicate that, so we post it
+   * inside the thread instead — that's also where live captions and the
+   * final mp3 land, so the message is collocated with the rest of the
+   * session's surface.
+   *
+   * When thread creation failed earlier (`threadId === null`), fall back
+   * to the parent channel so the invoker still sees the ping.
+   *
+   * Carries NO consent buttons — the invoker is auto-consented, and other
+   * members get their own per-member prompts via {@link promptInitial} /
    * {@link noteSpeaker}. Best-effort: a failure is logged but doesn't
    * abort the session.
    */
@@ -141,12 +149,12 @@ export class ConsentManager {
     transcription: boolean,
   ): Promise<void> {
     const kindLabel = transcription ? 'session recording with live transcription' : 'session recording'
-    const threadLink = threadId ? `\nTranscript: <#${threadId}>` : ''
-    const content = `<@${invokerUserId}> is starting a ${kindLabel}.${threadLink}`
+    const content = `<@${invokerUserId}> is starting a ${kindLabel}.`
+    const target = threadId ?? this.textChannelId
     try {
-      await this.sendTo(this.textChannelId, content, [])
+      await this.sendTo(target, content, [])
     } catch (err) {
-      this.logger.warn({ err, invokerUserId, recordingId: this.recordingId }, 'session-start announcement failed')
+      this.logger.warn({ err, invokerUserId, recordingId: this.recordingId, target }, 'session-start announcement failed')
     }
   }
 
