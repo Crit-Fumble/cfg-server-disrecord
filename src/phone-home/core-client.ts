@@ -152,7 +152,11 @@ export class CoreServerClient {
     if (!this.cfg) return null
     const url = this.url('/api/v1/disrecord/deepgram-token')
     try {
-      const res = await fetch(url, { method: 'POST', headers: this.headers() })
+      // Send a valid empty JSON object so Fastify's body parser doesn't reject
+      // the request — `this.headers()` always sets content-type: application/json,
+      // and the parser refuses an empty body when that content-type is declared.
+      // The route reads nothing off the body (it mints from the JWT claims).
+      const res = await fetch(url, { method: 'POST', headers: this.headers(), body: '{}' })
       if (!res.ok) {
         this.logger?.warn({ status: res.status }, 'deepgram-token fetch non-2xx')
         return null
