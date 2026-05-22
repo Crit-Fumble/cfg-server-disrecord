@@ -2,14 +2,10 @@
 #
 # cfg-server-disrecord — unified Discord voice recording container.
 #
-# Two modes from one image:
-#   worker  — legacy per-session SSE worker (core-server spawns it; pulls
-#             opus over SSE, runs Deepgram, POSTs transcripts/billing back).
-#   serve   — standalone container: own bot, own voice capture + mp3 mix +
-#             transcription, HTTP control API. Operate via:
-#               docker run -p 127.0.0.1:8080:8080 --env-file .env <img> serve
-#
-# Default CMD is `worker` so core-server's existing spawn keeps working.
+# One `serve` mode: own bot, own voice capture + mp3 mix + transcription,
+# HTTP control API. Runs local-only, or CFG-hosted when CORE_SERVER_URL is
+# set (core-server spawns it and proxies the control API). Operate via:
+#   docker run -p 127.0.0.1:8080:8080 --env-file .env <img> serve
 #
 # Private @crit-fumble/* packages from GitHub Packages (per .npmrc) need a
 # GitHub token at install time. Pass it as a BuildKit secret named `npmrc`:
@@ -57,9 +53,7 @@ RUN npm run build
 # ── Stage 3: runtime ─────────────────────────────────────────────────────────
 FROM base AS runtime
 
-# ffmpeg + ffprobe are required by `serve` mode for the mp3 mix, silence
-# trim, and split steps. The legacy `worker` mode doesn't use them, but
-# both modes ship in one image.
+# ffmpeg + ffprobe are required for the mp3 mix, silence trim, and split steps.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     rm -f /etc/apt/apt.conf.d/docker-clean && \
@@ -72,16 +66,14 @@ COPY --from=builder /app/package.json  ./package.json
 
 ENV NODE_ENV=production
 
-# serve mode runs the HTTP control server on this port (default 8080).
-# It binds 127.0.0.1 inside the container in Phase 1 — publish it with
-# `-p 127.0.0.1:8080:8080` to reach it from the host.
+# The HTTP control server runs on this port (default 8080). Local-only it
+# binds 127.0.0.1 — publish it with `-p 127.0.0.1:8080:8080`; CFG-hosted it
+# binds 0.0.0.0 with JWT auth.
 EXPOSE 8080
 
-# Finalized recordings (serve mode) land here — mount a volume so they
-# survive the container: `-v disrecord-data:/data/recordings`.
+# Finalized recordings land here — mount a volume so they survive the
+# container: `-v disrecord-data:/data/recordings`.
 VOLUME ["/data/recordings"]
 
-# Default CMD stays `worker` so core-server's existing dockerode spawn is
-# unaffected. Self-host operators override with `serve`.
 ENTRYPOINT ["node", "dist/index.js"]
-CMD ["worker"]
+CMD ["serve"]

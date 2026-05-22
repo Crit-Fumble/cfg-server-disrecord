@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import type { Client } from 'discord.js'
 import { VoiceCapture } from '../gateway/voice-capture.js'
 import { PcmCapture } from './pcm-capture.js'
-import { RecordingSession, type TranscriptFinalEvent } from '../worker/recording-session.js'
+import { RecordingSession, type TranscriptFinalEvent } from './recording-session.js'
 import { ConsentManager } from '../consent/consent-manager.js'
 import { processRecording } from './post-process.js'
 import { createRecordingThread, postRecording, tempDirOf } from '../discord/thread-poster.js'
@@ -94,6 +94,12 @@ export class SessionController {
   private billingTimer: NodeJS.Timeout | null = null
   /** Epoch ms of the last billing tick — slides forward across paused windows. */
   private lastBillingTickAt = 0
+  /**
+   * Whether this session incurs the separate `transcription` surcharge tick.
+   * True only when CFG-hosted with `transcriptionCtPerMinute` set (platform
+   * Deepgram key) AND transcription is actually active for the session.
+   */
+  private transcriptionBilled = false
 
   constructor(params: SessionControllerParams) {
     this.params = params
@@ -165,6 +171,11 @@ export class SessionController {
     this.status = 'recording'
 
     // ── CFG-hosted: arm the pause-aware billing tick ────────────────────────
+    // The separate `transcription` surcharge tick fires only when the
+    // platform Deepgram key is in use (`transcriptionCtPerMinute` set) AND
+    // transcription is actually running for this session. BYOK or disabled
+    // transcription ⇒ container uptime only, no surcharge.
+    this.transcriptionBilled = p.cfg?.transcriptionCtPerMinute != null && deepgramKey != null
     if (p.cfg) this.startBillingTimer()
 
     this.logger.info(
@@ -201,6 +212,10 @@ export class SessionController {
    * Arm the periodic CT billing tick. Pause-aware: while the session is
    * paused we slide `lastBillingTickAt` forward so the user isn't billed
    * for the paused window (ported from the legacy `worker.ts` cadence).
+   *
+   * Two ticks ride the SAME cadence: the `bot_container` uptime tick (always,
+   * when CFG-hosted) and the `transcription` surcharge tick (only when this
+   * session is on the platform Deepgram key — see `transcriptionBilled`).
    */
   private startBillingTimer(): void {
     const cfg = this.params.cfg
@@ -214,12 +229,7 @@ export class SessionController {
       const now = Date.now()
       const minutes = (now - this.lastBillingTickAt) / 60_000
       this.lastBillingTickAt = now
-      void this.params.core.postBillingTick({
-        resourceType: 'bot_container',
-        minutes,
-        ctPerMinute: cfg.ctPerMinute,
-        label: `Recording Server (${cfg.size}): ${minutes.toFixed(1)} min`,
-      })
+      this.postBillingTicks(minutes, false)
     }, BILLING_TICK_MINUTES * 60_000)
     timer.unref()
     this.billingTimer = timer
@@ -234,12 +244,31 @@ export class SessionController {
     }
     if (!cfg) return
     const finalMinutes = (Date.now() - this.lastBillingTickAt) / 60_000
-    if (finalMinutes > 0) {
-      await this.params.core.postBillingTick({
-        resourceType: 'bot_container',
-        minutes: finalMinutes,
-        ctPerMinute: cfg.ctPerMinute,
-        label: `Recording Server (${cfg.size}): final ${finalMinutes.toFixed(1)} min`,
+    if (finalMinutes > 0) await this.postBillingTicks(finalMinutes, true)
+  }
+
+  /**
+   * Post the billing tick(s) for `minutes` of active (non-paused) recording.
+   * Always posts the `bot_container` uptime tick; additionally posts a
+   * separate itemized `transcription` surcharge tick when this session runs
+   * on the platform Deepgram key (`transcriptionBilled`).
+   */
+  private postBillingTicks(minutes: number, final: boolean): void {
+    const cfg = this.params.cfg
+    if (!cfg) return
+    const suffix = final ? `final ${minutes.toFixed(1)} min` : `${minutes.toFixed(1)} min`
+    void this.params.core.postBillingTick({
+      resourceType: 'bot_container',
+      minutes,
+      ctPerMinute: cfg.ctPerMinute,
+      label: `Recording Server (${cfg.size}): ${suffix}`,
+    })
+    if (this.transcriptionBilled && cfg.transcriptionCtPerMinute != null) {
+      void this.params.core.postBillingTick({
+        resourceType: 'transcription',
+        minutes,
+        ctPerMinute: cfg.transcriptionCtPerMinute,
+        label: `Live Transcription: ${suffix}`,
       })
     }
   }

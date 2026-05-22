@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Crit-Fumble DisRecord — per-session Discord voice recording worker container. Orchestrated by cfg-core-server's services/disrecord; this repo holds only the container that runs inside Docker per active session.",
+  "description": "Crit-Fumble DisRecord — self-contained Discord voice recording container. Boots its own bot, captures voice, mixes mp3, and transcribes. Runs local-only or CFG-hosted (phones home to cfg-core-server for billing/Spaces/consent).",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -15,10 +15,9 @@
     "disrecord": "./dist/cli.js"
   },
   "scripts": {
-    "dev": "tsx watch --env-file=.env --clear-screen=false src/index.ts worker",
-    "dev:serve": "tsx watch --env-file=.env --clear-screen=false src/index.ts serve",
+    "dev": "tsx watch --env-file=.env --clear-screen=false src/index.ts serve",
     "build": "tsc && tsc-alias -f",
-    "start": "node dist/index.js worker",
+    "start": "node dist/index.js serve",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
     "test": "jest --config jest.config.cjs",

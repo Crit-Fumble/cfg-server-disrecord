@@ -68,4 +68,41 @@ describe('resolveStandaloneConfig', () => {
     setEnv({ ...BASE_ENV, CONTROL_PORT: '70000' })
     expect(() => resolveStandaloneConfig()).toThrow(/CONTROL_PORT/)
   })
+
+  describe('CFG-hosted transcription surcharge', () => {
+    const CFG_ENV = {
+      ...BASE_ENV,
+      CORE_SERVER_URL: 'http://core:3001',
+      CORE_SERVER_TOKEN: 'jwt',
+      DISRECORD_INSTALLATION_ID: 'inst-1',
+      DISRECORD_USER_ID: 'user-1',
+    }
+
+    it('leaves transcriptionCtPerMinute undefined when the env var is absent', () => {
+      setEnv(CFG_ENV)
+      expect(resolveStandaloneConfig().cfg?.transcriptionCtPerMinute).toBeUndefined()
+    })
+
+    it('treats an empty DISRECORD_TRANSCRIPTION_CT_PER_MIN as absent (undefined)', () => {
+      setEnv({ ...CFG_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '' })
+      expect(resolveStandaloneConfig().cfg?.transcriptionCtPerMinute).toBeUndefined()
+    })
+
+    it('resolves a numeric DISRECORD_TRANSCRIPTION_CT_PER_MIN', () => {
+      setEnv({ ...CFG_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '2.5' })
+      expect(resolveStandaloneConfig().cfg?.transcriptionCtPerMinute).toBe(2.5)
+    })
+
+    it('rejects a non-numeric / non-positive surcharge rate', () => {
+      setEnv({ ...CFG_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: 'abc' })
+      expect(() => resolveStandaloneConfig()).toThrow(/DISRECORD_TRANSCRIPTION_CT_PER_MIN/)
+      setEnv({ ...CFG_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '0' })
+      expect(() => resolveStandaloneConfig()).toThrow(/DISRECORD_TRANSCRIPTION_CT_PER_MIN/)
+    })
+
+    it('is undefined for a self-host container (no CORE_SERVER_URL)', () => {
+      setEnv({ ...BASE_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '2' })
+      expect(resolveStandaloneConfig().cfg).toBeUndefined()
+    })
+  })
 })

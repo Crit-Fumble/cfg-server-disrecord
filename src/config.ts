@@ -1,51 +1,13 @@
 /**
- * cfg-server-disrecord worker configuration — env-driven.
+ * cfg-server-disrecord configuration — env-driven.
  *
- * The repo used to ship a gateway mode too; that work moved into core-server
- * (services/disrecord/) when the standalone-gateway architecture was retired.
- * Everything here is now the worker container's view: how to reach core-server
- * for SSE opus + transcripts/billing callbacks, and per-session metadata
- * injected by core-server's worker-spawner.
+ * The container runs in `serve` mode: it boots its own Discord bot, joins
+ * voice, captures opus, mixes mp3, and (optionally) transcribes. It runs
+ * local-only by default, or CFG-hosted when `CORE_SERVER_URL` is set.
  *
- * No long-lived secrets — every credential the worker sees is per-session
- * and dies with the container.
+ * The bot token is the only long-lived credential and never leaves the
+ * container; CFG-hosted per-session JWTs die with the container.
  */
-
-export interface WorkerConfig {
-  /** Worker's installation ID — recordingSession.id; keys all worker callbacks. */
-  installationId: string
-  /** Owning user — for logging only; billing attribution lives in core-server. */
-  userId: string
-  /** Discord guild — logging / metadata. */
-  guildId: string
-  /** Discord voice channel id — logging / metadata. */
-  channelId: string
-  /** Deepgram pricing route. */
-  deepgramMode: 'platform' | 'byok' | 'disabled'
-  /** Present only when deepgramMode='byok' — already-decrypted user key. */
-  deepgramKey?: string
-  /** core-server base URL — used for both SSE opus subscription and callback POSTs. */
-  coreServerUrl: string
-  /**
-   * Per-session JWT minted by core-server at provisioning time.
-   * scope='disrecord-worker' + installationId claim + exp; signed with AUTH_SECRET.
-   * Gates the SSE subscription AND every callback. The worker holds no other
-   * credential.
-   */
-  coreServerToken: string
-  /** Container instance size — informational only; rate comes from `ctPerMinute`. */
-  size: 'nano' | 'micro' | 'small'
-  /**
-   * Worker-billing rate in CT/min, computed by core-server's slot-fraction
-   * formula at provision time (see cfg-core-server `container-sizing.ts`).
-   * The worker bills this rate verbatim on each tick; it doesn't run its
-   * own size→rate table anymore. core-server is the pricing source of
-   * truth so the displayed rate, the worker's per-tick claim, and the
-   * actual wallet debit all agree.
-   */
-  ctPerMinute: number
-  logLevel: string
-}
 
 function requireEnv(name: string): string {
   const v = process.env[name]
@@ -129,6 +91,13 @@ export interface CfgHostedConfig {
   ctPerMinute: number
   /** Container instance size — informational only. */
   size: string
+  /**
+   * Live-transcription surcharge rate in CT/min. PRESENCE is the signal that
+   * this session runs on the platform Deepgram key and must incur a separate
+   * itemized `transcription` billing tick (parallel to the `bot_container`
+   * uptime tick). Absent ⇒ BYOK or transcription disabled ⇒ no surcharge.
+   */
+  transcriptionCtPerMinute?: number
   /** DO Spaces credentials — when present the container uploads finalized mp3/VTT. */
   spaces?: SpacesConfig
 }
@@ -165,6 +134,18 @@ export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
     throw new Error(`Invalid DISRECORD_CT_PER_MIN: ${ctPerMinRaw}`)
   }
 
+  // Transcription surcharge rate — optional. Injected by core-server only
+  // when the recording's Deepgram mode is 'platform' (platform key). Absent
+  // for BYOK or disabled transcription, in which case no surcharge is billed.
+  const transcriptionRaw = process.env.DISRECORD_TRANSCRIPTION_CT_PER_MIN
+  let transcriptionCtPerMinute: number | undefined
+  if (transcriptionRaw !== undefined && transcriptionRaw !== '') {
+    transcriptionCtPerMinute = Number(transcriptionRaw)
+    if (!Number.isFinite(transcriptionCtPerMinute) || transcriptionCtPerMinute <= 0) {
+      throw new Error(`Invalid DISRECORD_TRANSCRIPTION_CT_PER_MIN: ${transcriptionRaw}`)
+    }
+  }
+
   let spaces: SpacesConfig | undefined
   const spacesKey = process.env.DO_SPACES_KEY
   if (spacesKey) {
@@ -184,6 +165,7 @@ export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
     userId: requireEnv('DISRECORD_USER_ID'),
     ctPerMinute,
     size: optionalEnv('DISRECORD_SIZE', 'small'),
+    transcriptionCtPerMinute,
     spaces,
   }
 }
@@ -205,33 +187,5 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     controlToken: process.env.CONTROL_TOKEN || undefined,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
     cfg: resolveCfgHostedConfig(),
-  }
-}
-
-export function resolveConfig(): WorkerConfig {
-  const size = optionalEnv('DISRECORD_SIZE', 'nano') as WorkerConfig['size']
-  if (size !== 'nano' && size !== 'micro' && size !== 'small') {
-    throw new Error(`Invalid DISRECORD_SIZE: ${size}`)
-  }
-  // core-server picks the rate and passes it in. Standalone-runs without
-  // core-server (rare; mostly dev) fall back to a conservative default that
-  // matches nano's slot-fraction price under the current $24 droplet.
-  const ctPerMinRaw = process.env.DISRECORD_CT_PER_MIN
-  const ctPerMinute = ctPerMinRaw ? Number(ctPerMinRaw) : 13
-  if (!Number.isFinite(ctPerMinute) || ctPerMinute <= 0) {
-    throw new Error(`Invalid DISRECORD_CT_PER_MIN: ${ctPerMinRaw}`)
-  }
-  return {
-    installationId: requireEnv('DISRECORD_INSTALLATION_ID'),
-    userId: requireEnv('DISRECORD_USER_ID'),
-    guildId: requireEnv('DISRECORD_GUILD_ID'),
-    channelId: requireEnv('DISRECORD_CHANNEL_ID'),
-    deepgramMode: requireEnv('DISRECORD_DEEPGRAM_MODE') as WorkerConfig['deepgramMode'],
-    deepgramKey: process.env.DISRECORD_DEEPGRAM_KEY,
-    coreServerUrl: requireEnv('CORE_SERVER_URL'),
-    coreServerToken: requireEnv('CORE_SERVER_TOKEN'),
-    size,
-    ctPerMinute,
-    logLevel: optionalEnv('LOG_LEVEL', 'info'),
   }
 }

@@ -1,31 +1,20 @@
 /**
  * cfg-server-disrecord entrypoint.
  *
- *   node dist/index.js worker   — legacy per-session SSE worker (core-server
- *                                 spawns this; pulls opus over SSE, runs
- *                                 Deepgram, POSTs transcripts/billing back).
- *   node dist/index.js serve    — standalone unified recording container:
- *                                 own bot, own voice capture + mp3 mix +
- *                                 transcription, HTTP control API. No
- *                                 core-server involvement.
+ *   node dist/index.js serve    — unified recording container: own bot, own
+ *                                 voice capture + mp3 mix + transcription,
+ *                                 HTTP control API. Runs local-only, or
+ *                                 CFG-hosted when CORE_SERVER_URL is set.
  *   node dist/index.js <other>  — delegated to the `disrecord` CLI
  *                                 (register-commands / status / start / stop).
  *
- * Both `worker` and `serve` modes ship in the same image; the Docker
- * default CMD is `worker` so core-server's existing spawn keeps working.
+ * The Docker default CMD is `serve`.
  */
 
 import { logger } from './logger.js'
 
 async function main(): Promise<void> {
-  const mode = (process.argv[2] ?? 'worker').toLowerCase()
-
-  if (mode === 'worker') {
-    const { resolveConfig } = await import('./config.js')
-    const { startWorker } = await import('./worker.js')
-    await startWorker(resolveConfig())
-    return
-  }
+  const mode = (process.argv[2] ?? 'serve').toLowerCase()
 
   if (mode === 'serve') {
     const { resolveStandaloneConfig } = await import('./config.js')

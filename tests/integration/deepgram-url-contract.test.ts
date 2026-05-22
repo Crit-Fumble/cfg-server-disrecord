@@ -171,7 +171,7 @@ describe('Deepgram URL contract — value formats', () => {
 
 describe('Deepgram URL contract — production worker config', () => {
   // This is the exact shape the worker sends in
-  // src/worker/recording-session.ts. If any of these change, the test
+  // src/recording/recording-session.ts. If any of these change, the test
   // turns red AND we need to re-verify against Deepgram's docs.
   const PRODUCTION_OPTIONS = {
     model: 'nova-3' as const,

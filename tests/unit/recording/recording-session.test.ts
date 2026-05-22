@@ -11,7 +11,7 @@
  *   - onTranscriptFinal callback receives both consented + redacted events
  */
 
-import { RecordingSession, type TranscriptFinalEvent } from '../../../src/worker/recording-session.js'
+import { RecordingSession, type TranscriptFinalEvent } from '../../../src/recording/recording-session.js'
 
 // Mock the Deepgram factory — capture the events sink so tests can drive it.
 const mockStreamSend = jest.fn()

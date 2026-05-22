@@ -25,7 +25,7 @@ import {
 import type { Client } from 'discord.js'
 import opus from '@discordjs/opus'
 import type { Logger } from '../logger.js'
-import type { RecordingSession } from '../worker/recording-session.js'
+import type { RecordingSession } from '../recording/recording-session.js'
 import type { PcmCapture } from '../recording/pcm-capture.js'
 import type { ConsentManager } from '../consent/consent-manager.js'
 
