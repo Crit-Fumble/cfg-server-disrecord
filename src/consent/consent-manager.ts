@@ -127,6 +127,30 @@ export class ConsentManager {
   }
 
   /**
+   * Post the session-start announcement in the destination channel. This is
+   * the "ping" the invoker sees so they know recording is live, with a link
+   * to the live-transcript thread when one was created. Carries NO consent
+   * buttons — the invoker is auto-consented at session start, and other
+   * members get their own consent prompts via {@link promptInitial} /
+   * {@link noteSpeaker}. Best-effort: a failure is logged but doesn't
+   * abort the session.
+   */
+  async postSessionStart(
+    invokerUserId: string,
+    threadId: string | null,
+    transcription: boolean,
+  ): Promise<void> {
+    const kindLabel = transcription ? 'session recording with live transcription' : 'session recording'
+    const threadLink = threadId ? `\nTranscript: <#${threadId}>` : ''
+    const content = `<@${invokerUserId}> is starting a ${kindLabel}.${threadLink}`
+    try {
+      await this.sendTo(this.textChannelId, content, [])
+    } catch (err) {
+      this.logger.warn({ err, invokerUserId, recordingId: this.recordingId }, 'session-start announcement failed')
+    }
+  }
+
+  /**
    * Post the initial consent prompt for everyone currently in voice.
    * Each user is pre-marked pending so noteSpeaker doesn't double-prompt.
    */

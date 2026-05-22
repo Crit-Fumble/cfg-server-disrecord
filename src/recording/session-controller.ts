@@ -180,7 +180,33 @@ export class SessionController {
     })
     await this.voice.join()
 
-    // Prompt everyone currently in the voice channel.
+    // Create the live thread NOW (when transcription is on, captions stream
+    // into it; on stop the mp3 is attached to this same thread instead of
+    // creating a new one). Best-effort — `createRecordingThread` returns
+    // null on failure and `deliver` falls back to posting in the parent
+    // channel. The thread is created BEFORE the announcement so the
+    // announcement can link to it.
+    const voiceChannelName = await this.voiceChannelName(p.client)
+    this.threadId = await createRecordingThread(
+      p.client,
+      p.textChannelId,
+      voiceChannelName,
+      p.transcription,
+      this.logger,
+    )
+
+    // Post the session-start announcement to the destination channel — the
+    // invoker's "ping" with the thread link. The invoker is auto-consented
+    // (pre-seeded via `initialConsented` above), so this message carries no
+    // consent buttons; per-member consent prompts go out below for everyone
+    // else in voice.
+    if (p.invokerUserId) {
+      await this.consent.postSessionStart(p.invokerUserId, this.threadId, p.transcription)
+    }
+
+    // Prompt everyone currently in the voice channel. The invoker is already
+    // in `initialConsented` so they're skipped — only OTHER members see a
+    // consent prompt.
     const memberIds = await this.voiceMemberIds(p.client)
     await this.consent.promptInitial(memberIds)
 
@@ -370,14 +396,10 @@ export class SessionController {
   private async deliver(result: Awaited<ReturnType<typeof processRecording>>): Promise<void> {
     if (!result) return
     const p = this.params
-    const voiceChannelName = await this.voiceChannelName(p.client)
-    this.threadId = await createRecordingThread(
-      p.client,
-      p.textChannelId,
-      voiceChannelName,
-      p.transcription,
-      this.logger,
-    )
+    // Reuse the thread created at session start so the mp3 lands in the same
+    // place live captions streamed into. If start-time thread creation failed
+    // (`threadId === null`), fall back to posting in the parent channel — the
+    // same fallback `createRecordingThread` already enforces.
     const target = this.threadId ?? p.textChannelId
     await postRecording(
       p.client,
@@ -401,6 +423,14 @@ export class SessionController {
       endSec: event.endSec,
     })
 
+    // Stream the finalized utterance into the live thread (best-effort).
+    // Redacted utterances are skipped — surfacing a non-consenting speaker's
+    // words would defeat the redaction. The VTT posted at stop still
+    // includes the complete record.
+    if (this.threadId && !event.isRedacted) {
+      void this.postLiveCaption(event)
+    }
+
     // CFG-hosted: phone the finalized utterance home so core-server can
     // persist it + fan out the live-caption SSE. No-op self-host (the
     // core client is a no-op when `cfg` is absent), best-effort otherwise.
@@ -414,6 +444,30 @@ export class SessionController {
         endSec: event.endSec,
         words: event.words.length > 0 ? event.words : undefined,
       })
+    }
+  }
+
+  /**
+   * Best-effort post of a single finalized utterance into the live thread.
+   * Naive 1-message-per-utterance — Discord rate-limits 5 msgs / 5s per
+   * channel, so very noisy multi-speaker sessions could shed messages here.
+   * Acceptable for Phase 1; batching is a follow-up if the limit bites in
+   * practice. Truncates to fit Discord's 2000-char per-message cap.
+   */
+  private async postLiveCaption(event: TranscriptFinalEvent): Promise<void> {
+    if (!this.threadId) return
+    const text = event.transcript.trim()
+    if (!text) return
+    try {
+      const channel = await this.params.client.channels.fetch(this.threadId)
+      if (!channel || !channel.isSendable()) return
+      const speaker = event.speakerName || event.speakerId
+      const prefix = `**${speaker}:** `
+      const budget = 2000 - prefix.length - 1
+      const body = text.length > budget ? text.slice(0, budget - 1) + '…' : text
+      await channel.send({ content: prefix + body })
+    } catch (err) {
+      this.logger.warn({ err, recordingId: this.recordingId, speakerId: event.speakerId }, 'live caption post failed')
     }
   }
 
