@@ -92,10 +92,100 @@ export interface StandaloneConfig {
    * Optional bearer token for the HTTP control API. When set, every
    * control request must carry `Authorization: Bearer <token>`. When
    * unset, the control server is unauthenticated (it binds 127.0.0.1
-   * only in Phase 1, so this is acceptable for single-host self-host).
+   * only in self-host mode, so this is acceptable for single-host).
    */
   controlToken?: string
   logLevel: string
+  /**
+   * CFG-hosted phone-home settings. Populated only when `CORE_SERVER_URL`
+   * is set — when it is unset, `cfg` is `undefined` and every phone-home
+   * path becomes a clean no-op. This is the blank-slate-boot guarantee:
+   * a container with only a bot token never reaches core-server.
+   */
+  cfg?: CfgHostedConfig
+}
+
+/**
+ * CFG-hosted configuration — present only when core-server spawned this
+ * container. Drives billing ticks, Spaces upload, consent sync, and the
+ * JWT-authenticated control API. Every field here is injected by
+ * core-server's container spawner.
+ */
+export interface CfgHostedConfig {
+  /** core-server base URL — billing/transcript/session-policy callbacks. */
+  coreServerUrl: string
+  /**
+   * Per-session JWT minted by core-server (scope='disrecord-worker' +
+   * installationId claim, HS256, signed with AUTH_SECRET). Used as the
+   * bearer for outbound callbacks AND as the verification token for
+   * inbound control-API requests.
+   */
+  coreServerToken: string
+  /** Installation id — equals the RecordingSession id; keys all callbacks. */
+  installationId: string
+  /** Owning user — logging / billing attribution. */
+  userId: string
+  /** Worker-billing rate in CT/min, computed by core-server's slot-fraction formula. */
+  ctPerMinute: number
+  /** Container instance size — informational only. */
+  size: string
+  /** DO Spaces credentials — when present the container uploads finalized mp3/VTT. */
+  spaces?: SpacesConfig
+}
+
+/** DO Spaces (S3-compatible) credentials for the CFG-hosted upload sink. */
+export interface SpacesConfig {
+  key: string
+  secret: string
+  bucket: string
+  region: string
+  endpoint: string
+}
+
+/**
+ * Resolve the optional CFG-hosted configuration block.
+ *
+ * Blank-slate-boot contract: returns `undefined` whenever `CORE_SERVER_URL`
+ * is unset, so a self-host operator never accidentally trips a phone-home
+ * code path. When `CORE_SERVER_URL` IS set, the remaining CFG vars are
+ * required — a half-configured phone-home is a misconfiguration we want to
+ * fail loudly at boot rather than silently degrade.
+ *
+ * DO Spaces is independently optional: with `CORE_SERVER_URL` but no
+ * `DO_SPACES_*`, the container phones home for billing/consent but still
+ * stores recordings locally (the LocalDirSink path).
+ */
+export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
+  const coreServerUrl = process.env.CORE_SERVER_URL
+  if (!coreServerUrl) return undefined
+
+  const ctPerMinRaw = process.env.DISRECORD_CT_PER_MIN
+  const ctPerMinute = ctPerMinRaw ? Number(ctPerMinRaw) : 13
+  if (!Number.isFinite(ctPerMinute) || ctPerMinute <= 0) {
+    throw new Error(`Invalid DISRECORD_CT_PER_MIN: ${ctPerMinRaw}`)
+  }
+
+  let spaces: SpacesConfig | undefined
+  const spacesKey = process.env.DO_SPACES_KEY
+  if (spacesKey) {
+    spaces = {
+      key: spacesKey,
+      secret: requireEnv('DO_SPACES_SECRET'),
+      bucket: requireEnv('DO_SPACES_BUCKET'),
+      region: requireEnv('DO_SPACES_REGION'),
+      endpoint: requireEnv('DO_SPACES_ENDPOINT'),
+    }
+  }
+
+  return {
+    coreServerUrl,
+    coreServerToken: requireEnv('CORE_SERVER_TOKEN'),
+    installationId: requireEnv('DISRECORD_INSTALLATION_ID'),
+    userId: requireEnv('DISRECORD_USER_ID'),
+    ctPerMinute,
+    size: optionalEnv('DISRECORD_SIZE', 'small'),
+    spaces,
+  }
 }
 
 export function resolveStandaloneConfig(): StandaloneConfig {
@@ -114,6 +204,7 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     controlPort,
     controlToken: process.env.CONTROL_TOKEN || undefined,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
+    cfg: resolveCfgHostedConfig(),
   }
 }
 

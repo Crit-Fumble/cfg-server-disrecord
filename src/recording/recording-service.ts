@@ -13,6 +13,7 @@
 import { nanoid } from './nanoid.js'
 import { SessionController } from './session-controller.js'
 import { SessionRegistry, GuildConflictError, SessionNotFoundError } from './session-registry.js'
+import { CoreServerClient } from '../phone-home/core-client.js'
 import type { Client } from 'discord.js'
 import type { OutputSink } from './output-sink.js'
 import type { StandaloneConfig } from '../config.js'
@@ -33,13 +34,20 @@ export interface StartRecordingRequest {
 
 export class RecordingService {
   private readonly registry = new SessionRegistry()
+  /**
+   * Phone-home client. Constructed once from `config.cfg` — a no-op client
+   * when self-host. Shared by every SessionController this service spawns.
+   */
+  private readonly core: CoreServerClient
 
   constructor(
     private readonly client: Client,
     private readonly sink: OutputSink,
     private readonly config: StandaloneConfig,
     private readonly logger: Logger,
-  ) {}
+  ) {
+    this.core = new CoreServerClient(config.cfg, logger.child({ module: 'core-client' }))
+  }
 
   /** True once the Discord client is connected and ready. */
   get botReady(): boolean {
@@ -77,6 +85,8 @@ export class RecordingService {
       deepgramLanguage: this.config.deepgramLanguage,
       sink: this.sink,
       invokerUserId: req.invokerUserId,
+      cfg: this.config.cfg,
+      core: this.core,
       logger: this.logger.child({ recordingId }),
     })
 
@@ -96,6 +106,14 @@ export class RecordingService {
 
   resume(recordingId: string): void {
     this.require(recordingId).resume()
+  }
+
+  /**
+   * Apply a consent update pushed by core-server (CFG-hosted control API).
+   * Throws {@link SessionNotFoundError} when the recording isn't active.
+   */
+  pushConsent(recordingId: string, discordUserId: string, consented: boolean): void {
+    this.require(recordingId).pushConsent(discordUserId, consented)
   }
 
   /**

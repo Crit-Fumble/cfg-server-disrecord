@@ -22,7 +22,16 @@ module.exports = {
         target: 'es2022',
       },
     }],
+    // `jose` ships as ESM-only `.js`; transform it (ecmascript parser) so the
+    // control-API JWT decode path (control/auth.ts) loads under jest.
+    '^.+\\.js$': ['@swc/jest', {
+      jsc: {
+        parser: { syntax: 'ecmascript' },
+        target: 'es2022',
+      },
+    }],
   },
+  transformIgnorePatterns: ['/node_modules/(?!jose/)'],
   testPathIgnorePatterns: ['/node_modules/', '/dist/'],
   clearMocks: true,
 }

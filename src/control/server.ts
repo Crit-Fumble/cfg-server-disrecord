@@ -1,32 +1,42 @@
 /**
- * HTTP control server for the standalone (`serve` mode) container.
+ * HTTP control server for the `serve`-mode container.
  *
- * Phase 1: binds 127.0.0.1 only. Bearer auth is applied when `CONTROL_TOKEN`
- * is set; otherwise the API is open (acceptable since it's localhost-bound
- * — a self-host operator controls everything on the host anyway).
+ * Two binds, picked by deployment mode:
+ *   Self-host  — `127.0.0.1`. Auth is the static `CONTROL_TOKEN` (or open
+ *                when unset; acceptable on a localhost bind).
+ *   CFG-hosted — `0.0.0.0`, so core-server can reach the published port.
+ *                Auth is the per-session JWT (see `control/auth.ts`).
  *
- * API (introduced Phase 1):
+ * API:
  *   POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription? } → { recordingId }
  *   POST /v1/recordings/:id/pause  → 204
  *   POST /v1/recordings/:id/resume → 204
  *   POST /v1/recordings/:id/stop   → 202   (post-processing async)
+ *   POST /v1/recordings/:id/consent { discordUserId, consented } → 204  (CFG-hosted consent push)
  *   GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused }
  *   GET  /v1/recordings            → [ ... ]
  *   GET  /healthz                  → { ok, botReady, activeRecordings }
- *
- * Phase 2 binds 0.0.0.0 + swaps the bearer check for per-session JWT auth.
  */
 
 import Fastify, { type FastifyInstance } from 'fastify'
 import { GuildConflictError, SessionNotFoundError } from '../recording/recording-service.js'
 import type { RecordingService } from '../recording/recording-service.js'
+import type { ControlAuthResult } from './auth.js'
 import type { Logger } from '../logger.js'
 
 export interface ControlServerParams {
   service: RecordingService
   port: number
-  /** Optional bearer token. When set, every /v1/* request must carry it. */
-  token?: string
+  /**
+   * Per-request authenticator built by `createControlAuthenticator`. It
+   * decides whether a given Authorization header is acceptable.
+   */
+  authenticate: (authHeader: string | undefined) => Promise<ControlAuthResult>
+  /**
+   * Bind host. `127.0.0.1` for self-host, `0.0.0.0` when CFG-hosted (so
+   * core-server can reach the published port).
+   */
+  host: string
   logger: Logger
 }
 
@@ -38,20 +48,26 @@ interface StartBody {
   invokerUserId?: string
 }
 
+interface ConsentBody {
+  discordUserId?: string
+  consented?: boolean
+}
+
 /**
  * Build + start the control server. Returns the Fastify instance so the
  * caller can `close()` it on shutdown.
  */
 export async function startControlServer(params: ControlServerParams): Promise<FastifyInstance> {
-  const { service, port, token, logger } = params
+  const { service, port, authenticate, host, logger } = params
   const app = Fastify({ logger: false })
 
-  // Bearer auth — applied to every /v1/* route when a token is configured.
+  // Auth — applied to every /v1/* route. `/healthz` stays open so core-server
+  // (and Docker healthchecks) can poll readiness before they hold a token.
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/v1/')) return
-    if (!token) return
-    const header = req.headers.authorization ?? ''
-    if (header !== `Bearer ${token}`) {
+    const result = await authenticate(req.headers.authorization)
+    if (!result.ok) {
+      logger.warn({ url: req.url, reason: result.reason }, 'control: request rejected')
       await reply.status(401).send({ error: 'unauthorized' })
     }
   })
@@ -115,6 +131,23 @@ export async function startControlServer(params: ControlServerParams): Promise<F
     }
   })
 
+  // CFG-hosted consent push. core-server upserts the RecordingConsent row,
+  // then POSTs here so the live consent gate honors the change immediately.
+  // Idempotent on the worker side (ConsentManager apply* are idempotent).
+  app.post('/v1/recordings/:id/consent', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = (req.body ?? {}) as ConsentBody
+    if (!body.discordUserId || typeof body.consented !== 'boolean') {
+      return reply.status(400).send({ error: 'discordUserId and consented are required' })
+    }
+    try {
+      service.pushConsent(id, body.discordUserId, body.consented)
+      return reply.status(204).send()
+    } catch (err) {
+      return notFoundOr500(reply, err, logger)
+    }
+  })
+
   app.get('/v1/recordings/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const session = service.describe(id)
@@ -124,9 +157,8 @@ export async function startControlServer(params: ControlServerParams): Promise<F
 
   app.get('/v1/recordings', async () => service.list())
 
-  // Phase 1: localhost-only. Phase 2 switches to 0.0.0.0 for core-server.
-  await app.listen({ host: '127.0.0.1', port })
-  logger.info({ port, authEnabled: token != null }, 'control server listening on 127.0.0.1')
+  await app.listen({ host, port })
+  logger.info({ host, port }, 'control server listening')
   return app
 }
 

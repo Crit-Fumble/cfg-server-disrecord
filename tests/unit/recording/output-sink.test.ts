@@ -1,10 +1,28 @@
 /**
- * LocalDirSink (Phase 1) + SpacesSink (Phase 2 stub).
+ * LocalDirSink + SpacesSink (CFG-hosted DO Spaces upload).
+ *
+ * The SpacesSink tests mock `@aws-sdk/lib-storage`'s `Upload` so no real
+ * network call is made — we only assert the sink wires the right
+ * Bucket/Key/ContentType/ACL params and returns the object keys.
  */
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+const uploadDone = jest.fn(async () => undefined)
+const uploadCtor = jest.fn()
+jest.mock('@aws-sdk/lib-storage', () => ({
+  Upload: jest.fn().mockImplementation((args: unknown) => {
+    uploadCtor(args)
+    return { done: uploadDone }
+  }),
+}))
+jest.mock('@aws-sdk/client-s3', () => ({
+  S3Client: jest.fn().mockImplementation(() => ({ __s3: true })),
+}))
+
 import { LocalDirSink, SpacesSink, type RecordingMeta } from '../../../src/recording/output-sink.js'
+import type { SpacesConfig } from '../../../src/config.js'
 import { logger } from '../../../src/logger.js'
 
 const META: RecordingMeta = {
@@ -65,9 +83,61 @@ describe('LocalDirSink', () => {
 })
 
 describe('SpacesSink', () => {
-  it('throws — not implemented until Phase 2', async () => {
-    await mkdir(tmpdir(), { recursive: true })
-    const sink = new SpacesSink()
-    await expect(sink.putRecording()).rejects.toThrow(/Phase 2/)
+  const SPACES: SpacesConfig = {
+    key: 'k',
+    secret: 's',
+    bucket: 'cfg-recordings',
+    region: 'us-east-1',
+    endpoint: 'https://nyc3.digitaloceanspaces.com',
+  }
+  let srcDir: string
+
+  beforeEach(async () => {
+    uploadDone.mockClear()
+    uploadCtor.mockClear()
+    srcDir = await mkdtemp(join(tmpdir(), 'spaces-src-'))
+  })
+
+  afterEach(async () => {
+    await rm(srcDir, { recursive: true, force: true })
+  })
+
+  it('uploads the mp3 to recordings/<id>/<id>.mp3 with a private ACL', async () => {
+    const mp3 = join(srcDir, 'mixed.mp3')
+    await writeFile(mp3, 'mp3-bytes')
+
+    const sink = new SpacesSink(SPACES, logger)
+    const res = await sink.putRecording('rec-9', mp3, undefined, {} as RecordingMeta)
+
+    expect(res.mp3Location).toBe('recordings/rec-9/rec-9.mp3')
+    expect(res.vttLocation).toBeUndefined()
+    expect(uploadDone).toHaveBeenCalledTimes(1)
+    expect(uploadCtor).toHaveBeenCalledTimes(1)
+    const params = uploadCtor.mock.calls[0][0].params
+    expect(params).toMatchObject({
+      Bucket: 'cfg-recordings',
+      Key: 'recordings/rec-9/rec-9.mp3',
+      ContentType: 'audio/mpeg',
+      ACL: 'private',
+    })
+  })
+
+  it('uploads the VTT alongside the mp3 when one is supplied', async () => {
+    const mp3 = join(srcDir, 'mixed.mp3')
+    const vtt = join(srcDir, 'captions.vtt')
+    await writeFile(mp3, 'mp3')
+    await writeFile(vtt, 'WEBVTT')
+
+    const sink = new SpacesSink(SPACES, logger)
+    const res = await sink.putRecording('rec-vtt', mp3, vtt, {} as RecordingMeta)
+
+    expect(res.vttLocation).toBe('recordings/rec-vtt/rec-vtt.vtt')
+    expect(uploadDone).toHaveBeenCalledTimes(2)
+    const vttParams = uploadCtor.mock.calls[1][0].params
+    expect(vttParams).toMatchObject({
+      Key: 'recordings/rec-vtt/rec-vtt.vtt',
+      ContentType: 'text/vtt',
+      ACL: 'private',
+    })
   })
 })

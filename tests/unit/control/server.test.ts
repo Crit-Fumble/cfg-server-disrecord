@@ -1,12 +1,12 @@
 /**
- * HTTP control server — bearer auth + routing.
+ * HTTP control server — auth + routing.
  *
- * Uses Fastify's `inject()` so no real socket is opened. The control server
- * normally binds 127.0.0.1; we start it on an ephemeral port and close it
- * after each test.
+ * Uses Fastify's `inject()` so no real socket is opened. The server is
+ * started on an ephemeral port and closed after each test.
  */
 import type { FastifyInstance } from 'fastify'
 import { startControlServer } from '../../../src/control/server.js'
+import { createControlAuthenticator } from '../../../src/control/auth.js'
 import { GuildConflictError, SessionNotFoundError } from '../../../src/recording/recording-service.js'
 import type { RecordingService } from '../../../src/recording/recording-service.js'
 import { logger } from '../../../src/logger.js'
@@ -20,17 +20,21 @@ function fakeService(overrides: Partial<RecordingService> = {}): RecordingServic
     pause: jest.fn(),
     resume: jest.fn(),
     stop: jest.fn(),
+    pushConsent: jest.fn(),
     describe: jest.fn(() => null),
     list: jest.fn(() => []),
   }
   return { ...base, ...overrides } as unknown as RecordingService
 }
 
-async function makeServer(
-  service: RecordingService,
-  token?: string,
-): Promise<FastifyInstance> {
-  return startControlServer({ service, port: 0, token, logger })
+async function makeServer(service: RecordingService, token?: string): Promise<FastifyInstance> {
+  return startControlServer({
+    service,
+    port: 0,
+    host: '127.0.0.1',
+    authenticate: createControlAuthenticator({ controlToken: token }),
+    logger,
+  })
 }
 
 describe('control server', () => {
@@ -41,7 +45,7 @@ describe('control server', () => {
     app = null
   })
 
-  describe('auth', () => {
+  describe('auth (static control token)', () => {
     it('allows /healthz without a token even when auth is enabled', async () => {
       app = await makeServer(fakeService(), 'secret')
       const res = await app.inject({ method: 'GET', url: '/healthz' })
@@ -139,6 +143,43 @@ describe('control server', () => {
       })
       app = await makeServer(service)
       const res = await app.inject({ method: 'POST', url: '/v1/recordings/missing/pause' })
+      expect(res.statusCode).toBe(404)
+    })
+
+    it('POST /v1/recordings/:id/consent applies the update and returns 204', async () => {
+      const service = fakeService()
+      app = await makeServer(service)
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/recordings/r1/consent',
+        payload: { discordUserId: 'u1', consented: true },
+      })
+      expect(res.statusCode).toBe(204)
+      expect(service.pushConsent).toHaveBeenCalledWith('r1', 'u1', true)
+    })
+
+    it('POST /v1/recordings/:id/consent 400s on a malformed body', async () => {
+      app = await makeServer(fakeService())
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/recordings/r1/consent',
+        payload: { discordUserId: 'u1' },
+      })
+      expect(res.statusCode).toBe(400)
+    })
+
+    it('POST /v1/recordings/:id/consent 404s for an unknown recording', async () => {
+      const service = fakeService({
+        pushConsent: jest.fn(() => {
+          throw new SessionNotFoundError('missing')
+        }),
+      })
+      app = await makeServer(service)
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/recordings/missing/consent',
+        payload: { discordUserId: 'u1', consented: false },
+      })
       expect(res.statusCode).toBe(404)
     })
 

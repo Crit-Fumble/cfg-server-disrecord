@@ -24,9 +24,18 @@ import { RecordingSession, type TranscriptFinalEvent } from '../worker/recording
 import { ConsentManager } from '../consent/consent-manager.js'
 import { processRecording } from './post-process.js'
 import { createRecordingThread, postRecording, tempDirOf } from '../discord/thread-poster.js'
+import { ConsentSync } from '../phone-home/consent-sync.js'
+import type { CoreServerClient } from '../phone-home/core-client.js'
+import type { CfgHostedConfig } from '../config.js'
 import type { OutputSink } from './output-sink.js'
 import type { CaptionEntry } from './caption-types.js'
 import type { Logger } from '../logger.js'
+
+/**
+ * Periodic CT billing tick cadence. 15 min matches core-server's existing
+ * uptime-tick cadence (ported from the legacy `worker.ts`).
+ */
+const BILLING_TICK_MINUTES = 15
 
 export type SessionStatus = 'starting' | 'recording' | 'paused' | 'stopping' | 'stopped' | 'failed'
 
@@ -47,6 +56,17 @@ export interface SessionControllerParams {
   sink: OutputSink
   /** Discord user id of the invoker — pre-consented. */
   invokerUserId?: string
+  /**
+   * CFG-hosted config. Present ⇒ the controller wires billing ticks,
+   * consent-sync, and transcript phone-home. Absent ⇒ pure self-host.
+   */
+  cfg?: CfgHostedConfig
+  /**
+   * Phone-home client. Always supplied; it is a no-op client when self-host
+   * (see {@link CoreServerClient}). The controller only wires the
+   * billing/consent/transcript paths when `cfg` is also present.
+   */
+  core: CoreServerClient
   logger: Logger
 }
 
@@ -67,6 +87,13 @@ export class SessionController {
   private voice!: VoiceCapture
   private readonly captions: CaptionEntry[] = []
   private threadId: string | null = null
+
+  /** CFG-hosted consent bridge — only constructed when `cfg` is present. */
+  private consentSync: ConsentSync | null = null
+  /** Billing-tick timer — only armed when `cfg` is present. */
+  private billingTimer: NodeJS.Timeout | null = null
+  /** Epoch ms of the last billing tick — slides forward across paused windows. */
+  private lastBillingTickAt = 0
 
   constructor(params: SessionControllerParams) {
     this.params = params
@@ -111,6 +138,15 @@ export class SessionController {
     this.consent.onConsent((userId) => void this.session.addConsentedUser(userId))
     this.consent.onDecline((userId) => this.session.addDeclinedUser(userId))
 
+    // ── CFG-hosted: seed consent from core-server's session policy ──────────
+    // Runs before voice-join so the consent set is populated by the time the
+    // first speaker frame arrives. Best-effort — a fetch failure just leaves
+    // everyone opt-out until they click the Discord button.
+    if (p.cfg) {
+      this.consentSync = new ConsentSync({ consent: this.consent, core: p.core, logger: this.logger })
+      await this.consentSync.seedFromPolicy()
+    }
+
     this.voice = new VoiceCapture({
       client: p.client,
       guildId: p.guildId,
@@ -127,6 +163,10 @@ export class SessionController {
     await this.consent.promptInitial(memberIds)
 
     this.status = 'recording'
+
+    // ── CFG-hosted: arm the pause-aware billing tick ────────────────────────
+    if (p.cfg) this.startBillingTimer()
+
     this.logger.info(
       { recordingId: this.recordingId, guildId: this.guildId, transcription: deepgramKey != null },
       'recording session started',
@@ -150,6 +190,61 @@ export class SessionController {
   }
 
   /**
+   * Apply a consent update pushed by core-server (CFG-hosted only). No-op
+   * when this session has no consent-sync wired (self-host).
+   */
+  pushConsent(userId: string, consented: boolean): void {
+    this.consentSync?.applyPushedUpdate(userId, consented)
+  }
+
+  /**
+   * Arm the periodic CT billing tick. Pause-aware: while the session is
+   * paused we slide `lastBillingTickAt` forward so the user isn't billed
+   * for the paused window (ported from the legacy `worker.ts` cadence).
+   */
+  private startBillingTimer(): void {
+    const cfg = this.params.cfg
+    if (!cfg) return
+    this.lastBillingTickAt = Date.now()
+    const timer = setInterval(() => {
+      if (this.status === 'paused') {
+        this.lastBillingTickAt = Date.now()
+        return
+      }
+      const now = Date.now()
+      const minutes = (now - this.lastBillingTickAt) / 60_000
+      this.lastBillingTickAt = now
+      void this.params.core.postBillingTick({
+        resourceType: 'bot_container',
+        minutes,
+        ctPerMinute: cfg.ctPerMinute,
+        label: `Recording Server (${cfg.size}): ${minutes.toFixed(1)} min`,
+      })
+    }, BILLING_TICK_MINUTES * 60_000)
+    timer.unref()
+    this.billingTimer = timer
+  }
+
+  /** Stop the billing timer and post a final partial-minute tick. */
+  private async stopBillingTimer(): Promise<void> {
+    const cfg = this.params.cfg
+    if (this.billingTimer) {
+      clearInterval(this.billingTimer)
+      this.billingTimer = null
+    }
+    if (!cfg) return
+    const finalMinutes = (Date.now() - this.lastBillingTickAt) / 60_000
+    if (finalMinutes > 0) {
+      await this.params.core.postBillingTick({
+        resourceType: 'bot_container',
+        minutes: finalMinutes,
+        ctPerMinute: cfg.ctPerMinute,
+        label: `Recording Server (${cfg.size}): final ${finalMinutes.toFixed(1)} min`,
+      })
+    }
+  }
+
+  /**
    * Stop the session: leave voice, finalize PCM, mix mp3, generate VTT,
    * store via the sink, and post the result into Discord. Runs to
    * completion — callers that need a fast HTTP response should not await it.
@@ -163,6 +258,12 @@ export class SessionController {
     this.voice.leave('session-stop')
     await this.pcmCapture.onSessionStop()
     await this.session.stop()
+
+    // CFG-hosted: stop the billing timer + post the final partial-minute
+    // tick. Best-effort — a failed tick must not block post-processing.
+    await this.stopBillingTimer().catch((err) =>
+      this.logger.warn({ err, recordingId: this.recordingId }, 'final billing tick failed'),
+    )
 
     try {
       const result = await processRecording(
@@ -251,6 +352,21 @@ export class SessionController {
       startSec: event.startSec,
       endSec: event.endSec,
     })
+
+    // CFG-hosted: phone the finalized utterance home so core-server can
+    // persist it + fan out the live-caption SSE. No-op self-host (the
+    // core client is a no-op when `cfg` is absent), best-effort otherwise.
+    if (this.params.cfg) {
+      void this.params.core.postTranscript({
+        speakerId: event.speakerId,
+        speakerName: event.speakerName,
+        transcript: event.transcript,
+        isRedacted: event.isRedacted,
+        startSec: event.startSec,
+        endSec: event.endSec,
+        words: event.words.length > 0 ? event.words : undefined,
+      })
+    }
   }
 
   private redactedSpeakerIds(): Set<string> {

@@ -221,7 +221,13 @@ export class ConsentManager {
       .catch((err) => this.logger.warn({ err, userId }, 'consent interaction reply failed'))
   }
 
-  private applyConsent(userId: string): void {
+  /**
+   * Mark a user consented. Idempotent — a repeat call is a no-op and fires
+   * no listeners. Public so two consent sources (Discord buttons + the
+   * CFG-hosted consent-sync) can both feed this manager without either
+   * needing to know about the other.
+   */
+  applyConsent(userId: string): void {
     this.pending.delete(userId)
     this.declined.delete(userId)
     if (this.consented.has(userId)) return
@@ -236,9 +242,14 @@ export class ConsentManager {
     }
   }
 
-  private applyDecline(userId: string): void {
+  /**
+   * Mark a user declined. Idempotent — a repeat call is a no-op and fires
+   * no listeners. Public for the same two-source reason as {@link applyConsent}.
+   */
+  applyDecline(userId: string): void {
     this.pending.delete(userId)
     this.consented.delete(userId)
+    if (this.declined.has(userId)) return
     this.declined.add(userId)
     this.seen.add(userId)
     for (const fn of this.declineListeners) {

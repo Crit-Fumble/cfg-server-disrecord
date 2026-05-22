@@ -1,15 +1,21 @@
 /**
  * Output sinks — pluggable destination for a finalized recording's mp3 + VTT.
  *
- * Phase 1 ships {@link LocalDirSink} (writes into a local directory). Phase 2
- * fills in {@link SpacesSink} (DO Spaces upload via @aws-sdk/lib-storage).
+ * Two implementations:
+ *   {@link LocalDirSink}  — writes into a local directory (self-host default).
+ *   {@link SpacesSink}    — uploads to DO Spaces (CFG-hosted; selected when
+ *                           `DO_SPACES_*` env is present).
+ *
  * The post-processor calls `putRecording()` and doesn't care which sink it
- * holds — the standalone container picks LocalDirSink; the CFG-hosted path
- * (Phase 2) picks SpacesSink when `DO_SPACES_*` env is present.
+ * holds.
  */
 
+import { createReadStream } from 'node:fs'
 import { copyFile, mkdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
+import { S3Client } from '@aws-sdk/client-s3'
+import { Upload } from '@aws-sdk/lib-storage'
+import type { SpacesConfig } from '../config.js'
 import type { Logger } from '../logger.js'
 
 export interface RecordingMeta {
@@ -80,11 +86,74 @@ export class LocalDirSink implements OutputSink {
 }
 
 /**
- * DO Spaces sink — Phase 2. Stub for now; throws so a misconfigured Phase 1
- * deployment fails loudly instead of silently dropping recordings.
+ * DO Spaces sink — CFG-hosted upload destination.
+ *
+ * Ported from cfg-core-server's `services/recording/post-processor.ts`
+ * upload block: same `@aws-sdk/lib-storage` `Upload` flow, same private ACL,
+ * same `recordings/<id>/<id>.{mp3,vtt}` key layout. Selected by the session
+ * controller when `DO_SPACES_*` env is present.
+ *
+ * The S3 client is constructed once per sink and reused across recordings.
  */
 export class SpacesSink implements OutputSink {
-  async putRecording(): Promise<PutRecordingResult> {
-    throw new Error('SpacesSink is not implemented until Phase 2 — use LocalDirSink')
+  private readonly s3: S3Client
+  private readonly bucket: string
+
+  constructor(
+    spaces: SpacesConfig,
+    private readonly logger: Logger,
+  ) {
+    this.bucket = spaces.bucket
+    this.s3 = new S3Client({
+      region: spaces.region,
+      endpoint: spaces.endpoint,
+      // Spaces, like most S3-compatible stores, expects path/virtual-host
+      // addressing that the default config already handles; credentials are
+      // passed explicitly so the container needs no AWS env/profile.
+      credentials: { accessKeyId: spaces.key, secretAccessKey: spaces.secret },
+    })
+  }
+
+  async putRecording(
+    recordingId: string,
+    mp3Path: string,
+    vttPath: string | undefined,
+    _meta: RecordingMeta,
+  ): Promise<PutRecordingResult> {
+    const baseKey = `recordings/${recordingId}/${recordingId}`
+
+    const mp3Key = `${baseKey}.mp3`
+    await new Upload({
+      client: this.s3,
+      params: {
+        Bucket: this.bucket,
+        Key: mp3Key,
+        Body: createReadStream(mp3Path),
+        ContentType: 'audio/mpeg',
+        ACL: 'private',
+      },
+    }).done()
+
+    let vttLocation: string | undefined
+    if (vttPath) {
+      const vttKey = `${baseKey}.vtt`
+      await new Upload({
+        client: this.s3,
+        params: {
+          Bucket: this.bucket,
+          Key: vttKey,
+          Body: createReadStream(vttPath),
+          ContentType: 'text/vtt',
+          ACL: 'private',
+        },
+      }).done()
+      vttLocation = vttKey
+    }
+
+    this.logger.info(
+      { recordingId, bucket: this.bucket, mp3: mp3Key, vtt: vttLocation ?? null },
+      'recording uploaded to DO Spaces',
+    )
+    return { mp3Location: mp3Key, vttLocation }
   }
 }
