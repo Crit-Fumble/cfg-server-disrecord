@@ -33,8 +33,16 @@ export const OPUS_SAMPLE_RATE = 48_000
  */
 export const DEEPGRAM_STREAM_TUNING = {
   utteranceEndMs: 1500,
-  /** VAD endpoint sensitivity at real sentence boundaries. */
-  endpointing: 500,
+  /**
+   * Trailing-silence threshold (ms) before Deepgram emits the final
+   * transcript for a speech segment. Higher = more chance for soft
+   * trailing words to register before the segment closes; too high
+   * delays final delivery. 1000ms is a good compromise — earlier 500ms
+   * was clipping the last 1–2 words off sentences that trailed off
+   * softly. Stay under utteranceEndMs so the UtteranceEnd message
+   * still fires after the final.
+   */
+  endpointing: 1000,
   /** Deepgram per-frame speech-detection telemetry; not consumed yet. */
   vadEvents: true,
 } as const

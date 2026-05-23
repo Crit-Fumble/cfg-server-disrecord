@@ -25,6 +25,7 @@ import { buildDeepgramTokenProvider } from '../deepgram/index.js'
 import { ConsentManager } from '../consent/consent-manager.js'
 import { processRecording } from './post-process.js'
 import { createRecordingThread, postRecording, tempDirOf } from '../discord/thread-poster.js'
+import { SpeakerWebhookManager } from '../discord/speaker-webhook.js'
 import { ConsentSync } from '../phone-home/consent-sync.js'
 import type { CoreServerClient } from '../phone-home/core-client.js'
 import type { CfgHostedConfig } from '../config.js'
@@ -37,6 +38,20 @@ import type { Logger } from '../logger.js'
  * uptime-tick cadence (ported from the legacy `worker.ts`).
  */
 const BILLING_TICK_MINUTES = 15
+
+/** Discord per-message character cap. */
+const DISCORD_MESSAGE_MAX_CHARS = 2000
+
+/** Wrap text in Discord italic markers — used for the "being said" interim render. */
+function italic(text: string): string {
+  return `*${text}*`
+}
+
+/** Hard-truncate to Discord's per-message char cap. Trailing ellipsis when cut. */
+function truncateForDiscord(content: string): string {
+  if (content.length <= DISCORD_MESSAGE_MAX_CHARS) return content
+  return content.slice(0, DISCORD_MESSAGE_MAX_CHARS - 1) + '…'
+}
 
 export type SessionStatus = 'starting' | 'recording' | 'paused' | 'stopping' | 'stopped' | 'failed'
 
@@ -117,18 +132,27 @@ export class SessionController {
   private transcriptionDelivered = false
 
   /**
-   * Live-caption interim-message tracking. Each speaker can have ONE
-   * in-flight interim message at a time — first interim from a fresh
-   * utterance POSTs a new Discord message (italic, "being said"),
-   * subsequent interims for the same utterance EDIT that message, and
-   * the final REPLACES the italic with the corrected non-italic text
-   * and clears the slot so the next utterance posts a fresh message.
+   * Per-speaker webhook caption state. Each speaker posts via their own
+   * webhook (their name + avatar appear as the chat author), so Discord
+   * auto-groups consecutive messages from the same speaker under a single
+   * header. One in-flight utterance per speaker: first interim POSTs an
+   * italic message via the webhook, subsequent interims EDIT it (throttled),
+   * the final EDITs one last time to non-italic + clears the slot so the
+   * speaker's next utterance posts a fresh message.
    */
+  private webhookManager: SpeakerWebhookManager | null = null
   private interimMessageIds = new Map<string, string>()
   /** Per-speaker throttle so we don't spam Discord edits on every interim. */
   private interimLastEditAt = new Map<string, number>()
   /** Last interim text per speaker — avoids edits when nothing actually changed. */
   private interimLastText = new Map<string, string>()
+  /**
+   * Per-speaker async queue. Serializes interim/final ops for a speaker so
+   * the first-interim POST resolves (and writes its message id) before any
+   * subsequent edit fires — fixes the race where parallel interims each
+   * posted a fresh message because none of them saw the id yet.
+   */
+  private speakerOpQueue = new Map<string, Promise<void>>()
   /** Minimum gap between consecutive edits per speaker (ms). Stays under Discord's 5/5s edit limit. */
   private readonly INTERIM_EDIT_THROTTLE_MS = 800
 
@@ -227,6 +251,13 @@ export class SessionController {
       threadMembers,
       this.logger,
     )
+
+    // Spin up the per-speaker webhook manager. Each speaker's live caption
+    // posts via their own webhook (their name + avatar) so Discord groups
+    // consecutive same-speaker messages under one header — natively. The
+    // manager itself does NOT post anything yet; webhooks are created
+    // lazily on the first interim from a given speaker.
+    this.webhookManager = new SpeakerWebhookManager(p.client, p.textChannelId, this.recordingId, this.logger)
 
     // Post the session-start announcement INSIDE the (private) thread —
     // pings the invoker + every voice member so they all get a Discord
@@ -406,6 +437,16 @@ export class SessionController {
       this.logger.error({ err, recordingId: this.recordingId }, 'post-processing failed')
     } finally {
       await rm(this.tempDir, { recursive: true, force: true }).catch(() => {})
+      // Drain any still-queued per-speaker ops so a late edit can't fire
+      // against a deleted webhook. Best-effort — anything still pending
+      // after the session is going down anyway.
+      await Promise.allSettled(Array.from(this.speakerOpQueue.values()))
+      // Delete the per-speaker webhooks the manager created so we don't
+      // leave residue in the channel's webhook list (15-cap globally).
+      if (this.webhookManager) {
+        await this.webhookManager.cleanup()
+        this.webhookManager = null
+      }
       if (this.status !== 'failed') this.status = 'stopped'
       this.logger.info({ recordingId: this.recordingId }, 'recording session stopped')
     }
@@ -475,7 +516,7 @@ export class SessionController {
     // utterance, EDIT it to the final (corrected) text in non-italic form
     // and clear the slot. Otherwise post a fresh final message.
     if (this.threadId && !event.isRedacted) {
-      void this.postOrEditFinal(event)
+      this.postFinalCaption(event)
     }
 
     // CFG-hosted: phone the finalized utterance home so core-server can
@@ -495,14 +536,18 @@ export class SessionController {
   }
 
   /**
-   * Render an in-progress utterance. First interim from a fresh utterance
-   * POSTs a new message (italic — "being said right now"); subsequent
-   * interims for the same utterance EDIT that message in-place, throttled
-   * to {@link INTERIM_EDIT_THROTTLE_MS} per speaker so a chatty Deepgram
-   * stream doesn't burn through Discord's 5-edits-per-5s-per-message
-   * limit. The final transcript (handled by {@link postOrEditFinal})
-   * tidies the message into its non-italic corrected form and clears the
-   * in-flight slot, so the next utterance from this speaker starts fresh.
+   * Live-caption flow: each speaker posts via their own Discord webhook
+   * (name + avatar = speaker), so Discord's chat renderer auto-groups
+   * consecutive same-speaker messages under one header — the "paragraph
+   * under one speaker" UX. Per-speaker ops are serialized through
+   * {@link enqueueSpeakerOp} so the first interim's POST resolves (and
+   * registers its message id) before any subsequent edit fires — fixes
+   * the race where parallel interims each posted a fresh message
+   * because none of them had the id yet.
+   *
+   * Falls back to bot messages (with explicit speaker label in the text)
+   * when webhooks aren't available — missing MANAGE_WEBHOOKS, hitting
+   * Discord's 15-webhooks-per-channel cap, or a create error.
    */
   private onInterim(event: TranscriptInterimEvent): void {
     if (!this.threadId) return
@@ -510,65 +555,141 @@ export class SessionController {
     if (!text) return
     // Don't reflip transcriptionDelivered here — interims aren't billable
     // value; the surcharge gate waits for the first FINAL transcript.
+
+    // Throttle + dedup synchronously, BEFORE enqueueing the op, so a chatty
+    // Deepgram stream doesn't fill the queue with no-op edits.
     const existing = this.interimMessageIds.get(event.speakerId)
     if (existing) {
-      // Throttle edits + skip when nothing changed.
       const last = this.interimLastEditAt.get(event.speakerId) ?? 0
       if (Date.now() - last < this.INTERIM_EDIT_THROTTLE_MS) return
       if (this.interimLastText.get(event.speakerId) === text) return
-      this.interimLastEditAt.set(event.speakerId, Date.now())
-      this.interimLastText.set(event.speakerId, text)
-      void this.editThreadMessage(existing, this.renderInterim(event.speakerName, text))
-    } else {
-      // First interim for this utterance — post a new message.
-      this.interimLastEditAt.set(event.speakerId, Date.now())
-      this.interimLastText.set(event.speakerId, text)
-      void this.postThreadMessage(this.renderInterim(event.speakerName, text)).then((id) => {
-        if (id) this.interimMessageIds.set(event.speakerId, id)
-      })
     }
+    this.interimLastEditAt.set(event.speakerId, Date.now())
+    this.interimLastText.set(event.speakerId, text)
+
+    this.enqueueSpeakerOp(event.speakerId, async () => {
+      const messageId = this.interimMessageIds.get(event.speakerId)
+      if (messageId) {
+        await this.editCaption(event.speakerId, messageId, italic(text))
+      } else {
+        const newId = await this.postCaption(event.speakerId, event.speakerName, italic(text))
+        if (newId) this.interimMessageIds.set(event.speakerId, newId)
+      }
+    })
   }
 
   /**
-   * Land the final transcript in the thread. Edits the in-flight interim
-   * message if we posted one for this utterance; otherwise posts fresh.
-   * Either way clears the speaker's interim slot so the next utterance
-   * starts a new message.
+   * Land the final transcript. Edits the in-flight interim message if we
+   * posted one for this utterance; otherwise posts fresh. Either way
+   * clears the speaker's interim slot so the next utterance starts a new
+   * message — Discord groups consecutive same-speaker messages visually.
    */
-  private async postOrEditFinal(event: TranscriptFinalEvent): Promise<void> {
+  private postFinalCaption(event: TranscriptFinalEvent): void {
     if (!this.threadId) return
     const text = event.transcript.trim()
     if (!text) return
-    const rendered = this.renderFinal(event.speakerName, text)
-    const interimId = this.interimMessageIds.get(event.speakerId)
-    this.interimMessageIds.delete(event.speakerId)
-    this.interimLastEditAt.delete(event.speakerId)
-    this.interimLastText.delete(event.speakerId)
-    if (interimId) {
-      await this.editThreadMessage(interimId, rendered)
-    } else {
-      await this.postThreadMessage(rendered)
+
+    this.enqueueSpeakerOp(event.speakerId, async () => {
+      const interimId = this.interimMessageIds.get(event.speakerId)
+      this.interimMessageIds.delete(event.speakerId)
+      this.interimLastEditAt.delete(event.speakerId)
+      this.interimLastText.delete(event.speakerId)
+      if (interimId) {
+        await this.editCaption(event.speakerId, interimId, text)
+      } else {
+        await this.postCaption(event.speakerId, event.speakerName, text)
+      }
+    })
+  }
+
+  /**
+   * Per-speaker serial queue. Ops for the same speaker run one at a time;
+   * different speakers run in parallel. Keeps post-then-edit ordering for
+   * a single speaker without serializing the whole thread.
+   */
+  private enqueueSpeakerOp(speakerId: string, op: () => Promise<void>): void {
+    const prev = this.speakerOpQueue.get(speakerId) ?? Promise.resolve()
+    const next = prev.then(op, op).catch((err) =>
+      this.logger.warn({ err, recordingId: this.recordingId, speakerId }, 'speaker op threw'),
+    )
+    this.speakerOpQueue.set(speakerId, next)
+  }
+
+  /**
+   * Post a caption via the speaker's webhook when available; falls back to
+   * a bot message with an explicit `**Name:**` prefix. Returns the new
+   * message id on success.
+   */
+  private async postCaption(
+    speakerId: string,
+    speakerName: string,
+    content: string,
+  ): Promise<string | null> {
+    if (!this.threadId) return null
+    const webhook = await this.resolveSpeakerWebhook(speakerId, speakerName)
+    const truncated = truncateForDiscord(content)
+    if (webhook) {
+      try {
+        const avatarURL = await this.resolveSpeakerAvatar(speakerId).catch(() => null)
+        const msg = await webhook.send({
+          content: truncated,
+          username: speakerName,
+          avatarURL: avatarURL ?? undefined,
+          threadId: this.threadId,
+        })
+        return msg.id
+      } catch (err) {
+        this.logger.warn(
+          { err, recordingId: this.recordingId, speakerId },
+          'webhook post failed — falling back to bot message',
+        )
+      }
+    }
+    // Bot-message fallback (no MANAGE_WEBHOOKS, webhook cap hit, or send error).
+    return this.postBotMessage(`**${speakerName}:** ${truncated}`)
+  }
+
+  /** Edit a previously-posted caption (webhook OR bot — id alone disambiguates). */
+  private async editCaption(speakerId: string, messageId: string, content: string): Promise<void> {
+    if (!this.threadId) return
+    const truncated = truncateForDiscord(content)
+    const webhook = await this.resolveSpeakerWebhook(speakerId, null)
+    if (webhook) {
+      try {
+        await webhook.editMessage(messageId, { content: truncated, threadId: this.threadId })
+        return
+      } catch (err) {
+        this.logger.warn(
+          { err, recordingId: this.recordingId, speakerId, messageId },
+          'webhook edit failed — falling back to channel.messages.edit',
+        )
+      }
+    }
+    await this.editBotMessage(messageId, truncated)
+  }
+
+  /**
+   * Look up (or create) the speaker's webhook. `speakerName` is required
+   * for the create path; on edit we can pass null because the webhook is
+   * cached after the first interim.
+   */
+  private async resolveSpeakerWebhook(speakerId: string, speakerName: string | null) {
+    if (!this.webhookManager) return null
+    const name = speakerName ?? (await this.resolveSpeakerName(speakerId).catch(() => speakerId))
+    const avatarURL = await this.resolveSpeakerAvatar(speakerId).catch(() => null)
+    return this.webhookManager.getOrCreate({ speakerId, displayName: name, avatarURL })
+  }
+
+  private async resolveSpeakerAvatar(speakerId: string): Promise<string | null> {
+    try {
+      const user = await this.params.client.users.fetch(speakerId)
+      return user.displayAvatarURL({ size: 128, extension: 'png' })
+    } catch {
+      return null
     }
   }
 
-  /** Italic in-progress render. Truncates to fit Discord's 2000-char cap. */
-  private renderInterim(speakerName: string, text: string): string {
-    const prefix = `**${speakerName}:** *`
-    const suffix = '*'
-    const budget = 2000 - prefix.length - suffix.length - 1
-    const body = text.length > budget ? text.slice(0, budget - 1) + '…' : text
-    return prefix + body + suffix
-  }
-
-  /** Final (corrected, non-italic) render. */
-  private renderFinal(speakerName: string, text: string): string {
-    const prefix = `**${speakerName}:** `
-    const budget = 2000 - prefix.length - 1
-    const body = text.length > budget ? text.slice(0, budget - 1) + '…' : text
-    return prefix + body
-  }
-
-  private async postThreadMessage(content: string): Promise<string | null> {
+  private async postBotMessage(content: string): Promise<string | null> {
     if (!this.threadId) return null
     try {
       const channel = await this.params.client.channels.fetch(this.threadId)
@@ -576,12 +697,12 @@ export class SessionController {
       const msg = await channel.send({ content })
       return msg.id
     } catch (err) {
-      this.logger.warn({ err, recordingId: this.recordingId }, 'live caption post failed')
+      this.logger.warn({ err, recordingId: this.recordingId }, 'bot-message caption post failed')
       return null
     }
   }
 
-  private async editThreadMessage(messageId: string, content: string): Promise<void> {
+  private async editBotMessage(messageId: string, content: string): Promise<void> {
     if (!this.threadId) return
     try {
       const channel = await this.params.client.channels.fetch(this.threadId)
@@ -590,7 +711,7 @@ export class SessionController {
       if (!msg || !msg.editable) return
       await msg.edit({ content })
     } catch (err) {
-      this.logger.warn({ err, recordingId: this.recordingId, messageId }, 'live caption edit failed')
+      this.logger.warn({ err, recordingId: this.recordingId, messageId }, 'bot-message caption edit failed')
     }
   }
 
