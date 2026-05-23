@@ -217,18 +217,33 @@ export class ConsentManager {
   }
 
   private buildButtons(): ActionRowBuilder<ButtonBuilder>[] {
-    // `buttonKey` is installationId in CFG-hosted (matches DB FK) and the
-    // local recordingId in self-host (matches the gateway-side handler).
+    // Three-button consent layout. `buttonKey` is installationId in
+    // CFG-hosted (matches the RecordingConsent FK) and the local
+    // recordingId in self-host (matches the gateway-side handler).
+    //
+    // Order = visual weight:
+    //   1. "Yes, and remember"   PRIMARY  — Success/green, default action
+    //   2. "Yes, this time only" SECONDARY — Primary/blue
+    //   3. "Skip my voice"       TERTIARY  — Danger/red
+    //
+    // core-server's handleConsentButton already routes the three customId
+    // prefixes (`consent_remember:`, `consent:`, `decline:`) — only the
+    // remember variant writes persistent opt-in via recordInSessionOptIn.
     return [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId(`consent:${this.buttonKey}`)
-          .setLabel('Allow Recording')
+          .setCustomId(`consent_remember:${this.buttonKey}`)
+          .setLabel('Yes, and remember')
           .setStyle(ButtonStyle.Success)
+          .setEmoji('🔁'),
+        new ButtonBuilder()
+          .setCustomId(`consent:${this.buttonKey}`)
+          .setLabel('Yes, this time only')
+          .setStyle(ButtonStyle.Primary)
           .setEmoji('✅'),
         new ButtonBuilder()
           .setCustomId(`decline:${this.buttonKey}`)
-          .setLabel('Opt Out')
+          .setLabel('Skip my voice')
           .setStyle(ButtonStyle.Danger)
           .setEmoji('❌'),
       ),
@@ -237,8 +252,14 @@ export class ConsentManager {
 
   private async requestConsent(userId: string): Promise<void> {
     const content =
-      `<@${userId}> A recording is in progress. Your audio is **not** being recorded — only audio you ` +
-      'speak AFTER clicking Allow is captured. Anything before is dropped at the gate and never stored.'
+      `<@${userId}> 🎙 A session recording is in progress.\n\n` +
+      '🔁 **Yes, and remember** — your voice is in the recording, transcript, and captions, AND skip ' +
+      'this prompt for future sessions in this channel.\n' +
+      '✅ **Yes, this time only** — your voice is in the recording, transcript, and captions, this session only.\n' +
+      "❌ **Skip my voice** — your voice isn't captured; the session continues normally. Won't re-prompt.\n\n" +
+      'You can change your choice any time while recording is live — in-session via these buttons, or ' +
+      "anytime via your account's recording-consent page. Only audio you speak AFTER clicking is " +
+      'captured; anything before is dropped at the gate and never stored.'
     const components = this.buildButtons()
 
     // Prefer the private thread: it's where the captions + mp3 + start
@@ -316,10 +337,12 @@ export class ConsentManager {
     if (!interaction.isButton()) return
     const [action, key] = interaction.customId.split(':')
     if (key !== this.buttonKey) return
-    if (action !== 'consent' && action !== 'decline') return
-    // Async work — but discord.js doesn't await event handlers, so kick
-    // off a fire-and-forget that handles its own errors.
-    void this.handleConsentInteraction(interaction, action as 'consent' | 'decline')
+    // `consent_remember` collapses to the same applyConsent on the
+    // container side — the persistent opt-in DB write is core-server's
+    // job in handleConsentButton. Both grant audio for THIS session.
+    const normalized = action === 'consent_remember' ? 'consent' : action
+    if (normalized !== 'consent' && normalized !== 'decline') return
+    void this.handleConsentInteraction(interaction, normalized as 'consent' | 'decline')
   }
 
   /**
