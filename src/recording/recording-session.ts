@@ -21,12 +21,18 @@ import type { Logger } from '../logger.js'
 export const OPUS_SAMPLE_RATE = 48_000
 
 /**
- * Deepgram fragmentation-biased tuning — locked in cfg-core-server (#359)
- * after the 2026-04 session analysis. Don't touch without a real session test.
+ * Deepgram fragmentation-biased tuning. Originally 4000ms in cfg-core-server
+ * (#359 / 2026-04) — chosen to keep complex multi-sentence thoughts grouped
+ * — but tuned down to 1500ms after live-test feedback that the 4s wait
+ * before a final transcript made the live thread captions feel unresponsive.
+ * 1.5s is comfortably past natural in-sentence breaths while still feeling
+ * snappy when the speaker stops to think. WS connections stay open across
+ * utterances (cfg-core-server#63), so finalizing more often is purely a
+ * segmentation choice — the language model's session-level context is
+ * unaffected.
  */
 export const DEEPGRAM_STREAM_TUNING = {
-  /** Hold mid-thought pauses inside the same utterance longer. */
-  utteranceEndMs: 4000,
+  utteranceEndMs: 1500,
   /** VAD endpoint sensitivity at real sentence boundaries. */
   endpointing: 500,
   /** Deepgram per-frame speech-detection telemetry; not consumed yet. */
