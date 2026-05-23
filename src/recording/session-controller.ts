@@ -108,6 +108,12 @@ export class SessionController {
   private voice!: VoiceCapture
   private readonly captions: CaptionEntry[] = []
   private threadId: string | null = null
+  /**
+   * Message id of the session-start announcement — the first message in
+   * the thread. The end-of-session "Back to Top" link anchors here so
+   * users can jump to the start of a multi-hour transcript in one click.
+   */
+  private firstThreadMessageId: string | null = null
 
   /** CFG-hosted consent bridge — only constructed when `cfg` is present. */
   private consentSync: ConsentSync | null = null
@@ -324,7 +330,12 @@ export class SessionController {
     // no consent buttons; per-member consent prompts go out below for
     // everyone else in voice.
     if (p.invokerUserId) {
-      await this.consent.postSessionStart(p.invokerUserId, this.threadId, p.transcription, memberIds)
+      this.firstThreadMessageId = await this.consent.postSessionStart(
+        p.invokerUserId,
+        this.threadId,
+        p.transcription,
+        memberIds,
+      )
     }
 
     // Prompt everyone currently in the voice channel. The invoker is already
@@ -588,6 +599,23 @@ export class SessionController {
       this.redactedSpeakerIds(),
       this.logger,
     )
+
+    // End-of-session "Back to Top" link. Anchors on the session-start
+    // announcement (first message in the thread) so users can jump back
+    // to the start of a multi-hour transcript in one click. Best-effort;
+    // a missing first-message id (thread post failed) or a send error
+    // just skips the link — the mp3 + VTT have already landed above.
+    if (this.threadId && this.firstThreadMessageId) {
+      try {
+        const channel = await p.client.channels.fetch(this.threadId)
+        if (channel && channel.isSendable()) {
+          const url = `https://discord.com/channels/${p.guildId}/${this.threadId}/${this.firstThreadMessageId}`
+          await channel.send({ content: `# [Back to Top](${url})` })
+        }
+      } catch (err) {
+        this.logger.warn({ err, recordingId: this.recordingId }, 'Back-to-Top link post failed (best-effort)')
+      }
+    }
   }
 
   private onTranscript(event: TranscriptFinalEvent): void {

@@ -176,7 +176,7 @@ export class ConsentManager {
     threadId: string | null,
     transcription: boolean,
     memberIds: string[] = [],
-  ): Promise<void> {
+  ): Promise<string | null> {
     const kindLabel = transcription ? 'session recording with live transcription' : 'session recording'
     // Mention everyone who was in voice at start so they get a Discord
     // notification pointing them at the private thread. The invoker leads
@@ -189,9 +189,13 @@ export class ConsentManager {
     const content = `${leadMention} starting a ${kindLabel}.`
     const target = threadId ?? this.textChannelId
     try {
-      await this.sendTo(target, content, [])
+      // Return the message id — the session-controller anchors the
+      // end-of-session "Back to Top" link on this so users can jump
+      // back to the start of a multi-hour transcript in one click.
+      return await this.sendTo(target, content, [])
     } catch (err) {
       this.logger.warn({ err, invokerUserId, recordingId: this.recordingId, target }, 'session-start announcement failed')
+      return null
     }
   }
 
@@ -299,12 +303,13 @@ export class ConsentManager {
     channelId: string,
     content: string,
     components: ActionRowBuilder<ButtonBuilder>[],
-  ): Promise<void> {
+  ): Promise<string> {
     const channel = await this.client.channels.fetch(channelId)
     if (!channel || !channel.isSendable()) {
       throw new Error(`channel ${channelId} is not sendable`)
     }
-    await channel.send({ content, components })
+    const msg = await channel.send({ content, components })
+    return msg.id
   }
 
   private onInteraction(interaction: Interaction): void {
