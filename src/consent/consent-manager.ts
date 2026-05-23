@@ -38,10 +38,19 @@ type ConsentListener = (userId: string) => void
 export interface ConsentManagerParams {
   recordingId: string
   client: Client
-  /** Text channel/thread the consent prompt is posted into. */
+  /**
+   * Parent text channel — used as a fallback target for consent prompts
+   * when the thread doesn't exist or the user can't be added to it.
+   */
   textChannelId: string
-  /** Optional second channel to mirror the prompt to (e.g. the voice channel chat). */
-  mirrorChannelId?: string
+  /**
+   * The recording's private thread. When set, consent prompts post HERE
+   * (with the late joiner first added to the thread so they can see +
+   * click the buttons). Keeps the parent channel quiet and groups every
+   * recording artifact — captions, mp3, consent prompts, start
+   * announcement — inside the same thread.
+   */
+  threadId?: string | null
   /** User IDs pre-consented at start (e.g. the invoker). */
   initialConsented?: Iterable<string>
   logger: Logger
@@ -51,7 +60,7 @@ export class ConsentManager {
   private readonly recordingId: string
   private readonly client: Client
   private readonly textChannelId: string
-  private readonly mirrorChannelId?: string
+  private threadId: string | null
   private readonly logger: Logger
 
   private readonly consented = new Set<string>()
@@ -70,7 +79,7 @@ export class ConsentManager {
     this.recordingId = params.recordingId
     this.client = params.client
     this.textChannelId = params.textChannelId
-    this.mirrorChannelId = params.mirrorChannelId
+    this.threadId = params.threadId ?? null
     this.logger = params.logger
     for (const id of params.initialConsented ?? []) {
       this.consented.add(id)
@@ -143,6 +152,17 @@ export class ConsentManager {
    * {@link noteSpeaker}. Best-effort: a failure is logged but doesn't
    * abort the session.
    */
+  /**
+   * Late-binding setter for the recording thread. The thread is created
+   * AFTER the manager constructor runs (the controller needs the manager
+   * first so it can build the recording session), so the thread id is
+   * wired in once thread creation resolves. All subsequent prompts +
+   * announcements target the thread when it's set.
+   */
+  setThreadId(threadId: string | null): void {
+    this.threadId = threadId
+  }
+
   async postSessionStart(
     invokerUserId: string,
     threadId: string | null,
@@ -202,23 +222,29 @@ export class ConsentManager {
   }
 
   private async requestConsent(userId: string): Promise<void> {
-    try {
-      const content =
-        `<@${userId}> A recording is in progress. Your audio is **not** being recorded. ` +
-        'Click below to allow recording.'
-      const components = this.buildButtons()
-      await this.sendTo(this.textChannelId, content, components)
-      if (this.mirrorChannelId && this.mirrorChannelId !== this.textChannelId) {
-        await this.sendTo(this.mirrorChannelId, content, components).catch((err) =>
-          this.logger.warn({ err, userId }, 'consent prompt mirror failed (non-fatal)'),
-        )
+    const content =
+      `<@${userId}> A recording is in progress. Your audio is **not** being recorded — only audio you ` +
+      'speak AFTER clicking Allow is captured. Anything before is dropped at the gate and never stored.'
+    const components = this.buildButtons()
+
+    // Prefer the private thread: it's where the captions + mp3 + start
+    // announcement live, so the prompt is collocated with the artifact
+    // the user is consenting to be in. Add the user to the thread first
+    // so they can see + interact with the prompt — private-thread
+    // messages are invisible to non-members. Falls back to the parent
+    // text channel on any thread error (creation failed, perm missing,
+    // member-add rejected, etc.) so the prompt always reaches them.
+    const sent = await this.tryPostToThread(userId, content, components)
+    if (!sent) {
+      try {
+        await this.sendTo(this.textChannelId, content, components)
+      } catch (err) {
+        this.logger.error({ err, userId, recordingId: this.recordingId }, 'consent prompt failed')
+        // Can't prompt — default to declined so audio stays off.
+        this.pending.delete(userId)
+        this.declined.add(userId)
+        return
       }
-    } catch (err) {
-      this.logger.error({ err, userId, recordingId: this.recordingId }, 'consent prompt failed')
-      // Can't prompt — default to declined so audio stays off.
-      this.pending.delete(userId)
-      this.declined.add(userId)
-      return
     }
 
     // Auto-resolve to declined after the window if the user never clicks.
@@ -228,6 +254,36 @@ export class ConsentManager {
         this.logger.info({ userId, recordingId: this.recordingId }, 'consent window elapsed — declined')
       }
     }, LATE_JOINER_TIMEOUT_MS).unref()
+  }
+
+  /**
+   * Try to post the consent prompt inside the recording thread. Adds the
+   * user to the (private) thread first so they can see + click. Returns
+   * true on success, false on any failure (caller falls back to the
+   * parent channel).
+   */
+  private async tryPostToThread(
+    userId: string,
+    content: string,
+    components: ActionRowBuilder<ButtonBuilder>[],
+  ): Promise<boolean> {
+    if (!this.threadId) return false
+    try {
+      const channel = await this.client.channels.fetch(this.threadId)
+      if (!channel || !('isThread' in channel) || !channel.isThread()) return false
+      // members.add succeeds even if they're already in the thread.
+      // Failure here (e.g. user left the guild) drops us to the
+      // parent-channel fallback rather than failing the consent flow.
+      await channel.members.add(userId).catch((err: unknown) =>
+        this.logger.warn({ err, userId, threadId: this.threadId }, 'failed to add user to recording thread'),
+      )
+      if (!channel.isSendable()) return false
+      await channel.send({ content, components })
+      return true
+    } catch (err) {
+      this.logger.warn({ err, userId, threadId: this.threadId }, 'consent prompt thread post failed — falling back to parent channel')
+      return false
+    }
   }
 
   private async sendTo(

@@ -173,7 +173,9 @@ export class SessionController {
       recordingId: this.recordingId,
       client: p.client,
       textChannelId: p.textChannelId,
-      mirrorChannelId: p.textChannelId !== p.voiceChannelId ? p.voiceChannelId : undefined,
+      // threadId is wired below via setThreadId once createRecordingThread
+      // resolves — consent prompts then target the thread (with the user
+      // added on demand) and fall back to textChannelId on any failure.
       initialConsented: p.invokerUserId ? [p.invokerUserId] : [],
       logger: this.logger,
     })
@@ -251,6 +253,10 @@ export class SessionController {
       threadMembers,
       this.logger,
     )
+    // Hand the thread id to the consent manager so subsequent prompts
+    // (initial + late-joiner) target the thread, adding the user to it
+    // on demand. Falls back to the parent channel on any thread error.
+    this.consent.setThreadId(this.threadId)
 
     // Spin up the per-speaker webhook manager. Each speaker's live caption
     // posts via their own webhook (their name + avatar) so Discord groups
