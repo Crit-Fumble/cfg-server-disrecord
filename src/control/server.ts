@@ -15,6 +15,8 @@
  *   POST /v1/recordings/:id/consent { discordUserId, consented } → 204  (CFG-hosted consent push)
  *   GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused }
  *   GET  /v1/recordings            → [ ... ]
+ *   GET  /v1/recordings/:id/webhooks       → categorized cfg-resesh-* + foreign webhook list
+ *   POST /v1/recordings/:id/webhooks/sweep → delete stale cfg-resesh-rec-* webhooks
  *   GET  /healthz                  → { ok, botReady, activeRecordings }
  */
 
@@ -156,6 +158,41 @@ export async function startControlServer(params: ControlServerParams): Promise<F
   })
 
   app.get('/v1/recordings', async () => service.list())
+
+  // ── Webhook hygiene ────────────────────────────────────────────────────
+  // GET  /v1/recordings/:id/webhooks       → categorized list of all
+  //        cfg-resesh-* webhooks in the session's destination channel
+  //        (kind = mine | recording-stale | resesh-other-feature | foreign).
+  //        Useful for ops to see what's eating the channel's 15-webhook
+  //        cap before deciding to sweep.
+  // POST /v1/recordings/:id/webhooks/sweep → delete stale cfg-resesh-rec-*
+  //        webhooks (any recordingId != this session's). Leaves other-
+  //        feature ReSesh webhooks (e.g. future CiC) and foreign
+  //        integrations alone. Returns the sweep result counts.
+  // Both run against the active session's destination channel; cross-
+  //        channel cleanup is an out-of-band admin task.
+  app.get('/v1/recordings/:id/webhooks', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const audit = await service.auditWebhooks(id)
+    if (audit === null) {
+      return reply
+        .status(503)
+        .send({ error: 'webhook_audit_unavailable', message: 'no active session OR bot lacks MANAGE_WEBHOOKS' })
+    }
+    return reply.send({ recordingId: id, webhooks: audit })
+  })
+
+  app.post('/v1/recordings/:id/webhooks/sweep', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const result = await service.sweepWebhooks(id)
+    if (result === null) return reply.status(404).send({ error: 'not_found' })
+    if (result.unavailable) {
+      return reply
+        .status(503)
+        .send({ error: 'webhook_sweep_unavailable', message: 'bot lacks MANAGE_WEBHOOKS or fetch failed' })
+    }
+    return reply.send({ recordingId: id, ...result })
+  })
 
   await app.listen({ host, port })
   logger.info({ host, port }, 'control server listening')

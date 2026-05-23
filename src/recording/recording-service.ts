@@ -149,6 +149,18 @@ export class RecordingService {
     return this.registry.getByGuild(guildId)?.describe() ?? null
   }
 
+  /** Audit webhooks in the session's destination channel. Null = no such session. */
+  async auditWebhooks(recordingId: string) {
+    return (await this.registry.get(recordingId)?.auditWebhooks()) ?? null
+  }
+
+  /** Sweep stale recording webhooks in the session's destination channel. */
+  async sweepWebhooks(recordingId: string) {
+    const controller = this.registry.get(recordingId)
+    if (!controller) return null
+    return controller.sweepWebhooks()
+  }
+
   /** Stop every active recording — used on container shutdown. */
   async stopAll(): Promise<void> {
     const all = this.registry.list()

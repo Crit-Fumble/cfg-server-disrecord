@@ -257,7 +257,15 @@ export class SessionController {
     // consecutive same-speaker messages under one header — natively. The
     // manager itself does NOT post anything yet; webhooks are created
     // lazily on the first interim from a given speaker.
+    //
+    // init() sweeps any stale `cfg-resesh-rec-*` webhooks left in the
+    // parent channel by crashed prior sessions, freeing slots back to
+    // Discord's 15-webhook cap before this session starts creating its
+    // own. Fired in parallel with the consent-prompt loop below — neither
+    // depends on the other, and we don't want to block the join on a
+    // slow Discord API call.
     this.webhookManager = new SpeakerWebhookManager(p.client, p.textChannelId, this.recordingId, this.logger)
+    void this.webhookManager.init()
 
     // Post the session-start announcement INSIDE the (private) thread —
     // pings the invoker + every voice member so they all get a Discord
@@ -450,6 +458,34 @@ export class SessionController {
       if (this.status !== 'failed') this.status = 'stopped'
       this.logger.info({ recordingId: this.recordingId }, 'recording session stopped')
     }
+  }
+
+  /**
+   * Audit the parent text channel's webhooks — categorized by ownership.
+   * Returns null if the bot lacks MANAGE_WEBHOOKS. Used by the control
+   * API's `GET /v1/webhooks` endpoint for ops visibility.
+   */
+  async auditWebhooks() {
+    return this.webhookManager?.audit() ?? null
+  }
+
+  /**
+   * Delete stale `cfg-resesh-rec-*` webhooks (any recordingId != ours)
+   * in the parent channel. Used by the control API's
+   * `POST /v1/webhooks/sweep` endpoint. Leaves non-recording ReSesh
+   * webhooks (e.g. future Chat in Character) and foreign integrations
+   * untouched.
+   */
+  async sweepWebhooks() {
+    return (
+      this.webhookManager?.sweepStale('manual') ?? {
+        kept: 0,
+        deleted: 0,
+        otherReseshFeature: 0,
+        foreign: 0,
+        unavailable: true,
+      }
+    )
   }
 
   /** Snapshot for the control API. */
