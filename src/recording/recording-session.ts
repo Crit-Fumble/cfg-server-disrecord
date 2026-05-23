@@ -332,6 +332,21 @@ export class RecordingSession {
     this.redactedInFlight.clear()
     this.lastRedactedEmitSec.clear()
 
+    // ── Drain: ask Deepgram to flush pending finals BEFORE closing ──────────
+    // Deepgram only emits a final transcript for an in-progress utterance
+    // when `utterance_end_ms` of silence elapses OR a CloseStream / Finalize
+    // is received. If the user clicks Stop right after speech, the in-flight
+    // utterance hasn't hit its silence threshold and CloseStream's
+    // flush-then-close race can drop the final before our `transcript`
+    // handler sees it — the VTT then comes out missing that last utterance
+    // even though the user heard themselves speak it. Sending Finalize
+    // first, then giving the WS a short grace window before close, gives
+    // Deepgram time to deliver pending finals on the same connection.
+    for (const s of this.speakerStreams.values()) {
+      if (!s.closed) s.finalize()
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, 800))
+
     const closes = Array.from(this.speakerStreams.values()).map((s) => s.close())
     await Promise.allSettled(closes)
     this.speakerStreams.clear()

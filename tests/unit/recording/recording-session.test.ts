@@ -17,11 +17,13 @@ import { RecordingSession, type TranscriptFinalEvent } from '../../../src/record
 const mockStreamSend = jest.fn()
 const mockStreamClose = jest.fn(async () => undefined)
 const mockStreamConnect = jest.fn(async () => undefined)
+const mockStreamFinalize = jest.fn(() => undefined)
 
 interface FakeStream {
   send: jest.Mock
   close: jest.Mock
   connect: jest.Mock
+  finalize: jest.Mock
   closed: boolean
   on: jest.Mock
   emit: (event: 'transcript' | 'error' | 'close', payload: unknown) => void
@@ -39,6 +41,7 @@ function makeFakeStream(): FakeStream {
     send: mockStreamSend,
     close: mockStreamClose,
     connect: mockStreamConnect,
+    finalize: mockStreamFinalize,
     closed: false,
     on: jest.fn((event: string, cb: (payload: unknown) => void) => {
       listeners[event]?.push(cb)
@@ -62,6 +65,7 @@ beforeEach(() => {
   mockStreamSend.mockReset()
   mockStreamClose.mockReset().mockImplementation(async () => undefined)
   mockStreamConnect.mockReset().mockImplementation(async () => undefined)
+  mockStreamFinalize.mockReset()
   ;(createDeepgramStream as jest.Mock).mockClear()
 })
 

@@ -189,34 +189,41 @@ export class SessionController {
     })
     await this.voice.join()
 
-    // Create the live thread NOW (when transcription is on, captions stream
-    // into it; on stop the mp3 is attached to this same thread instead of
-    // creating a new one). Best-effort — `createRecordingThread` returns
-    // null on failure and `deliver` falls back to posting in the parent
-    // channel. The thread is created BEFORE the announcement so the
-    // announcement can link to it.
+    // Look up voice members up front — used for thread invites, the
+    // announcement ping list, and the consent-prompt loop below.
+    const memberIds = await this.voiceMemberIds(p.client)
+
+    // Create the live thread NOW (private — only the invoker + current
+    // voice members get added, so the recording artifact + transcripts
+    // are visible only to people who were in the call). When
+    // transcription is on, captions stream into it; on stop the mp3 is
+    // attached to this same thread instead of creating a new one.
+    // Best-effort — `createRecordingThread` returns null on failure and
+    // `deliver` falls back to posting in the parent channel.
     const voiceChannelName = await this.voiceChannelName(p.client)
+    const threadMembers = Array.from(new Set([p.invokerUserId, ...memberIds].filter((id): id is string => !!id)))
     this.threadId = await createRecordingThread(
       p.client,
       p.textChannelId,
       voiceChannelName,
       p.transcription,
+      threadMembers,
       this.logger,
     )
 
-    // Post the session-start announcement to the destination channel — the
-    // invoker's "ping" with the thread link. The invoker is auto-consented
-    // (pre-seeded via `initialConsented` above), so this message carries no
-    // consent buttons; per-member consent prompts go out below for everyone
-    // else in voice.
+    // Post the session-start announcement INSIDE the (private) thread —
+    // pings the invoker + every voice member so they all get a Discord
+    // notification pointing at the thread. The invoker is auto-consented
+    // (pre-seeded via `initialConsented` above), so this message carries
+    // no consent buttons; per-member consent prompts go out below for
+    // everyone else in voice.
     if (p.invokerUserId) {
-      await this.consent.postSessionStart(p.invokerUserId, this.threadId, p.transcription)
+      await this.consent.postSessionStart(p.invokerUserId, this.threadId, p.transcription, memberIds)
     }
 
     // Prompt everyone currently in the voice channel. The invoker is already
     // in `initialConsented` so they're skipped — only OTHER members see a
     // consent prompt.
-    const memberIds = await this.voiceMemberIds(p.client)
     await this.consent.promptInitial(memberIds)
 
     this.status = 'recording'

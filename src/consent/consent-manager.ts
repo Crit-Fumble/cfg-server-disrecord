@@ -147,9 +147,18 @@ export class ConsentManager {
     invokerUserId: string,
     threadId: string | null,
     transcription: boolean,
+    memberIds: string[] = [],
   ): Promise<void> {
     const kindLabel = transcription ? 'session recording with live transcription' : 'session recording'
-    const content = `<@${invokerUserId}> is starting a ${kindLabel}.`
+    // Mention everyone who was in voice at start so they get a Discord
+    // notification pointing them at the private thread. The invoker leads
+    // the mention list; voice members follow in deduplicated order.
+    const mentionIds = Array.from(
+      new Set([invokerUserId, ...memberIds].filter((id) => typeof id === 'string' && id.length > 0)),
+    )
+    const mentions = mentionIds.map((id) => `<@${id}>`).join(' ')
+    const leadMention = mentions || `<@${invokerUserId}>`
+    const content = `${leadMention} starting a ${kindLabel}.`
     const target = threadId ?? this.textChannelId
     try {
       await this.sendTo(target, content, [])

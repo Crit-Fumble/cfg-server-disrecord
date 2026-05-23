@@ -31,15 +31,29 @@ import type { PostProcessResult } from '../recording/post-process.js'
 import type { Logger } from '../logger.js'
 
 /**
- * Create a private thread under `textChannelId` for a recording.
- * Returns the new thread's id, or null when creation fails (caller falls
- * back to posting in the parent channel).
+ * Create a PRIVATE thread under `textChannelId` for a recording and invite
+ * every member who was in voice at session start so they (and only they)
+ * can see the live transcript + final recording. Returns the new thread's
+ * id, or null when creation fails (caller falls back to posting in the
+ * parent channel).
+ *
+ * Private threads keep the session's audio + transcript out of the
+ * parent channel's history for anyone who wasn't in the call — useful
+ * for sessions with sensitive content (recordings include consenting
+ * speakers only, but limiting *visibility* of the artifact to call
+ * participants is a separate privacy axis).
+ *
+ * Falls back to a public thread on any private-thread error (e.g. the
+ * server has private threads disabled): better to deliver the artifact
+ * than to fail the session over a thread-visibility downgrade. The
+ * caller's `postSessionStart` ping still notifies the invitee list.
  */
 export async function createRecordingThread(
   client: Client,
   textChannelId: string,
   voiceChannelName: string,
   transcription: boolean,
+  memberIds: string[],
   logger: Logger,
 ): Promise<string | null> {
   try {
@@ -56,11 +70,44 @@ export async function createRecordingThread(
     const kindLabel = transcription ? 'Transcription' : 'Recording'
     const rawName = `${voiceChannelName} - ${dateStr} - ${kindLabel}`
     const threadName = rawName.length > 100 ? rawName.slice(0, 100) : rawName
-    const thread = await (channel as TextChannel).threads.create({
-      name: threadName,
-      autoArchiveDuration: 1440,
-    })
-    logger.info({ threadId: thread.id, threadName }, 'recording thread created')
+
+    let thread
+    try {
+      thread = await (channel as TextChannel).threads.create({
+        name: threadName,
+        autoArchiveDuration: 1440,
+        type: ChannelType.PrivateThread,
+        invitable: false,
+      })
+    } catch (privateErr) {
+      logger.warn(
+        { err: privateErr, textChannelId },
+        'private thread creation failed — falling back to public thread',
+      )
+      thread = await (channel as TextChannel).threads.create({
+        name: threadName,
+        autoArchiveDuration: 1440,
+      })
+    }
+
+    // Invite every voice member so they have access to the (private) thread.
+    // Best-effort per user — one bad id (e.g. left the guild between
+    // session start and thread create) shouldn't fail the others.
+    const unique = Array.from(new Set(memberIds.filter((id) => typeof id === 'string' && id.length > 0)))
+    if (unique.length > 0) {
+      await Promise.all(
+        unique.map((userId) =>
+          thread.members.add(userId).catch((err: unknown) =>
+            logger.warn({ err, userId, threadId: thread.id }, 'failed to add member to recording thread'),
+          ),
+        ),
+      )
+    }
+
+    logger.info(
+      { threadId: thread.id, threadName, type: thread.type, memberCount: unique.length },
+      'recording thread created',
+    )
     return thread.id
   } catch (err) {
     logger.warn({ err, textChannelId }, 'thread creation failed — posting in channel')
