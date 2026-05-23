@@ -132,6 +132,19 @@ export class SessionController {
   private transcriptionDelivered = false
 
   /**
+   * In-flight stop promise. The control-API `/stop` call kicks off the
+   * full post-process (mix mp3, upload to Spaces, post to Discord
+   * thread) which takes seconds. When core-server's spawner then
+   * SIGTERMs the container, the SIGTERM handler also calls stop() —
+   * without this, the second call hits `status === 'stopping'` and
+   * returns instantly, then SIGTERM proceeds to destroy the Discord
+   * gateway WHILE deliver() is still running → the thread post fails
+   * with "Expected token to be set." Re-entered stop() returns this
+   * promise so SIGTERM actually waits for the post-process to finish.
+   */
+  private stopInFlight: Promise<void> | null = null
+
+  /**
    * Per-speaker webhook caption state. Each speaker posts via their own
    * webhook (their name + avatar appear as the chat author), so Discord
    * auto-groups consecutive messages from the same speaker under a single
@@ -439,6 +452,17 @@ export class SessionController {
    * completion — callers that need a fast HTTP response should not await it.
    */
   async stop(): Promise<void> {
+    if (this.status === 'stopped') return
+    if (this.stopInFlight) return this.stopInFlight
+    this.stopInFlight = this.runStop()
+    try {
+      await this.stopInFlight
+    } finally {
+      this.stopInFlight = null
+    }
+  }
+
+  private async runStop(): Promise<void> {
     if (this.status === 'stopped' || this.status === 'stopping') return
     this.status = 'stopping'
     this.logger.info({ recordingId: this.recordingId }, 'recording stopping')
