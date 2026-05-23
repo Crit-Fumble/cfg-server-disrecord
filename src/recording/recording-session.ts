@@ -49,6 +49,20 @@ export interface TranscriptFinalEvent {
   words: DeepgramWord[]
 }
 
+/**
+ * Interim (in-progress) transcript event — fired as the speaker is talking,
+ * before Deepgram finalizes the utterance. The text rewrites itself as more
+ * audio arrives; consumers should expect to *replace* their last interim
+ * render for the same speaker rather than append. Each utterance from a
+ * given speaker emits a stream of interims followed by exactly one final.
+ */
+export interface TranscriptInterimEvent {
+  speakerId: string
+  speakerName: string
+  transcript: string
+  isRedacted: boolean
+}
+
 export interface RecordingSessionParams {
   /**
    * Deepgram token provider — resolves the websocket credential per speaker
@@ -66,6 +80,15 @@ export interface RecordingSessionParams {
   resolveSpeakerName: (userId: string) => Promise<string>
   /** Called once per finalized transcript (consented + redacted placeholders). */
   onTranscriptFinal: (event: TranscriptFinalEvent) => void | Promise<void>
+  /**
+   * Optional: called for each interim (non-final) transcript update so
+   * consumers can render in-progress captions. Redacted speakers do NOT
+   * fire this callback (their final fires as a [redacted] placeholder).
+   * The same utterance can fire many interims followed by exactly one
+   * final — consumers should treat each interim as a replacement for the
+   * prior one keyed on speakerId.
+   */
+  onTranscriptInterim?: (event: TranscriptInterimEvent) => void
   /**
    * Consent set. When provided, speakers NOT in the set are redacted — a
    * single `[redacted]` placeholder is emitted per turn instead of opening
@@ -92,6 +115,7 @@ export class RecordingSession {
   private readonly keyterms: string[]
   private readonly resolveSpeakerName: (userId: string) => Promise<string>
   private readonly onTranscriptFinal: (event: TranscriptFinalEvent) => void | Promise<void>
+  private readonly onTranscriptInterim: ((event: TranscriptInterimEvent) => void) | null
   private readonly consentedUserIds: Set<string> | null
   private readonly logger: Logger | null
 
@@ -135,6 +159,7 @@ export class RecordingSession {
     this.keyterms = params.keyterms ?? []
     this.resolveSpeakerName = params.resolveSpeakerName
     this.onTranscriptFinal = params.onTranscriptFinal
+    this.onTranscriptInterim = params.onTranscriptInterim ?? null
     this.consentedUserIds = params.consentedUserIds ?? null
     this.logger = params.logger ?? null
   }
@@ -214,7 +239,29 @@ export class RecordingSession {
     const speakerName = this.speakerNames.get(userId)!
 
     deepgramStream.on('transcript', (ev) => {
-      if (!ev.isFinal || !ev.transcript.trim()) return
+      const text = ev.transcript.trim()
+      if (!text) return
+
+      // Interim: fire to the optional callback for live caption rendering
+      // (consented speakers only — redacted users shouldn't have their
+      // in-progress text leak even briefly). Then fall through; finals
+      // continue to flow on the same event channel.
+      if (!ev.isFinal) {
+        const isConsented = this.consentedUserIds == null || this.consentedUserIds.has(userId)
+        if (this.onTranscriptInterim && isConsented) {
+          try {
+            this.onTranscriptInterim({
+              speakerId: userId,
+              speakerName,
+              transcript: text,
+              isRedacted: false,
+            })
+          } catch (err) {
+            this.logger?.warn({ err, userId }, 'onTranscriptInterim threw')
+          }
+        }
+        return
+      }
 
       // Globalize per-speaker timestamps once, so all consumers see the
       // same time origin. Deepgram words[i].start is relative to per-

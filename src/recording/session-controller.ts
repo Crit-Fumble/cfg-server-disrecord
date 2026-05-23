@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import type { Client } from 'discord.js'
 import { VoiceCapture } from '../gateway/voice-capture.js'
 import { PcmCapture } from './pcm-capture.js'
-import { RecordingSession, type TranscriptFinalEvent } from './recording-session.js'
+import { RecordingSession, type TranscriptFinalEvent, type TranscriptInterimEvent } from './recording-session.js'
 import { buildDeepgramTokenProvider } from '../deepgram/index.js'
 import { ConsentManager } from '../consent/consent-manager.js'
 import { processRecording } from './post-process.js'
@@ -116,6 +116,22 @@ export class SessionController {
    */
   private transcriptionDelivered = false
 
+  /**
+   * Live-caption interim-message tracking. Each speaker can have ONE
+   * in-flight interim message at a time — first interim from a fresh
+   * utterance POSTs a new Discord message (italic, "being said"),
+   * subsequent interims for the same utterance EDIT that message, and
+   * the final REPLACES the italic with the corrected non-italic text
+   * and clears the slot so the next utterance posts a fresh message.
+   */
+  private interimMessageIds = new Map<string, string>()
+  /** Per-speaker throttle so we don't spam Discord edits on every interim. */
+  private interimLastEditAt = new Map<string, number>()
+  /** Last interim text per speaker — avoids edits when nothing actually changed. */
+  private interimLastText = new Map<string, string>()
+  /** Minimum gap between consecutive edits per speaker (ms). Stays under Discord's 5/5s edit limit. */
+  private readonly INTERIM_EDIT_THROTTLE_MS = 800
+
   constructor(params: SessionControllerParams) {
     this.params = params
     this.recordingId = params.recordingId
@@ -163,6 +179,7 @@ export class SessionController {
       consentedUserIds: this.consent.consentedIds(),
       resolveSpeakerName: (userId) => this.resolveSpeakerName(userId),
       onTranscriptFinal: (event: TranscriptFinalEvent) => this.onTranscript(event),
+      onTranscriptInterim: (event: TranscriptInterimEvent) => this.onInterim(event),
       logger: this.logger,
     })
     // Keep the RecordingSession consent set in sync with the manager.
@@ -453,8 +470,12 @@ export class SessionController {
     // Redacted utterances are skipped — surfacing a non-consenting speaker's
     // words would defeat the redaction. The VTT posted at stop still
     // includes the complete record.
+    //
+    // If we already posted an interim message for this speaker's in-flight
+    // utterance, EDIT it to the final (corrected) text in non-italic form
+    // and clear the slot. Otherwise post a fresh final message.
     if (this.threadId && !event.isRedacted) {
-      void this.postLiveCaption(event)
+      void this.postOrEditFinal(event)
     }
 
     // CFG-hosted: phone the finalized utterance home so core-server can
@@ -474,26 +495,102 @@ export class SessionController {
   }
 
   /**
-   * Best-effort post of a single finalized utterance into the live thread.
-   * Naive 1-message-per-utterance — Discord rate-limits 5 msgs / 5s per
-   * channel, so very noisy multi-speaker sessions could shed messages here.
-   * Acceptable for Phase 1; batching is a follow-up if the limit bites in
-   * practice. Truncates to fit Discord's 2000-char per-message cap.
+   * Render an in-progress utterance. First interim from a fresh utterance
+   * POSTs a new message (italic — "being said right now"); subsequent
+   * interims for the same utterance EDIT that message in-place, throttled
+   * to {@link INTERIM_EDIT_THROTTLE_MS} per speaker so a chatty Deepgram
+   * stream doesn't burn through Discord's 5-edits-per-5s-per-message
+   * limit. The final transcript (handled by {@link postOrEditFinal})
+   * tidies the message into its non-italic corrected form and clears the
+   * in-flight slot, so the next utterance from this speaker starts fresh.
    */
-  private async postLiveCaption(event: TranscriptFinalEvent): Promise<void> {
+  private onInterim(event: TranscriptInterimEvent): void {
     if (!this.threadId) return
     const text = event.transcript.trim()
     if (!text) return
+    // Don't reflip transcriptionDelivered here — interims aren't billable
+    // value; the surcharge gate waits for the first FINAL transcript.
+    const existing = this.interimMessageIds.get(event.speakerId)
+    if (existing) {
+      // Throttle edits + skip when nothing changed.
+      const last = this.interimLastEditAt.get(event.speakerId) ?? 0
+      if (Date.now() - last < this.INTERIM_EDIT_THROTTLE_MS) return
+      if (this.interimLastText.get(event.speakerId) === text) return
+      this.interimLastEditAt.set(event.speakerId, Date.now())
+      this.interimLastText.set(event.speakerId, text)
+      void this.editThreadMessage(existing, this.renderInterim(event.speakerName, text))
+    } else {
+      // First interim for this utterance — post a new message.
+      this.interimLastEditAt.set(event.speakerId, Date.now())
+      this.interimLastText.set(event.speakerId, text)
+      void this.postThreadMessage(this.renderInterim(event.speakerName, text)).then((id) => {
+        if (id) this.interimMessageIds.set(event.speakerId, id)
+      })
+    }
+  }
+
+  /**
+   * Land the final transcript in the thread. Edits the in-flight interim
+   * message if we posted one for this utterance; otherwise posts fresh.
+   * Either way clears the speaker's interim slot so the next utterance
+   * starts a new message.
+   */
+  private async postOrEditFinal(event: TranscriptFinalEvent): Promise<void> {
+    if (!this.threadId) return
+    const text = event.transcript.trim()
+    if (!text) return
+    const rendered = this.renderFinal(event.speakerName, text)
+    const interimId = this.interimMessageIds.get(event.speakerId)
+    this.interimMessageIds.delete(event.speakerId)
+    this.interimLastEditAt.delete(event.speakerId)
+    this.interimLastText.delete(event.speakerId)
+    if (interimId) {
+      await this.editThreadMessage(interimId, rendered)
+    } else {
+      await this.postThreadMessage(rendered)
+    }
+  }
+
+  /** Italic in-progress render. Truncates to fit Discord's 2000-char cap. */
+  private renderInterim(speakerName: string, text: string): string {
+    const prefix = `**${speakerName}:** *`
+    const suffix = '*'
+    const budget = 2000 - prefix.length - suffix.length - 1
+    const body = text.length > budget ? text.slice(0, budget - 1) + '…' : text
+    return prefix + body + suffix
+  }
+
+  /** Final (corrected, non-italic) render. */
+  private renderFinal(speakerName: string, text: string): string {
+    const prefix = `**${speakerName}:** `
+    const budget = 2000 - prefix.length - 1
+    const body = text.length > budget ? text.slice(0, budget - 1) + '…' : text
+    return prefix + body
+  }
+
+  private async postThreadMessage(content: string): Promise<string | null> {
+    if (!this.threadId) return null
     try {
       const channel = await this.params.client.channels.fetch(this.threadId)
-      if (!channel || !channel.isSendable()) return
-      const speaker = event.speakerName || event.speakerId
-      const prefix = `**${speaker}:** `
-      const budget = 2000 - prefix.length - 1
-      const body = text.length > budget ? text.slice(0, budget - 1) + '…' : text
-      await channel.send({ content: prefix + body })
+      if (!channel || !channel.isSendable()) return null
+      const msg = await channel.send({ content })
+      return msg.id
     } catch (err) {
-      this.logger.warn({ err, recordingId: this.recordingId, speakerId: event.speakerId }, 'live caption post failed')
+      this.logger.warn({ err, recordingId: this.recordingId }, 'live caption post failed')
+      return null
+    }
+  }
+
+  private async editThreadMessage(messageId: string, content: string): Promise<void> {
+    if (!this.threadId) return
+    try {
+      const channel = await this.params.client.channels.fetch(this.threadId)
+      if (!channel || !channel.isTextBased() || !('messages' in channel)) return
+      const msg = await channel.messages.fetch(messageId).catch(() => null)
+      if (!msg || !msg.editable) return
+      await msg.edit({ content })
+    } catch (err) {
+      this.logger.warn({ err, recordingId: this.recordingId, messageId }, 'live caption edit failed')
     }
   }
 
