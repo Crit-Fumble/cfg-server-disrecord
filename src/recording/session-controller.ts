@@ -203,11 +203,38 @@ export class SessionController {
       core: p.core,
       logger: this.logger,
     })
+    // ── CFG-hosted: pre-fetch the session policy ────────────────────────────
+    // It carries TWO things we need before RecordingSession boots:
+    //   1. The seeded consent list (auto-consent for the invoker + anyone
+    //      who pre-consented via the Activity / channel settings).
+    //   2. Deepgram keywords / keyterms — campaign-derived plus per-channel
+    //      from ReseshChannelSettings. Without these the model misses
+    //      player names ("Keyway" instead of "Keawe"), monster names,
+    //      jargon, etc. Earlier the policy was fetched by consent-sync but
+    //      only consentedUserIds were consumed; the keyword fields were
+    //      thrown away.
+    let policyKeywords: string[] = []
+    let policyKeyterms: string[] = []
+    if (p.cfg) {
+      const policy = await p.core.fetchSessionPolicy()
+      for (const userId of policy.consentedUserIds) {
+        this.consent.applyConsent(userId)
+      }
+      policyKeywords = policy.keywords ?? []
+      policyKeyterms = policy.keyterms ?? []
+      this.logger.info(
+        { consented: policy.consentedUserIds.length, keywords: policyKeywords.length, keyterms: policyKeyterms.length },
+        'consent + keywords seeded from session policy',
+      )
+    }
+
     this.session = new RecordingSession({
       deepgramTokenProvider: tokenProvider,
       deepgramModel: p.deepgramModel,
       language: p.deepgramLanguage,
       consentedUserIds: this.consent.consentedIds(),
+      keywords: policyKeywords,
+      keyterms: policyKeyterms,
       resolveSpeakerName: (userId) => this.resolveSpeakerName(userId),
       onTranscriptFinal: (event: TranscriptFinalEvent) => this.onTranscript(event),
       onTranscriptInterim: (event: TranscriptInterimEvent) => this.onInterim(event),
@@ -217,13 +244,12 @@ export class SessionController {
     this.consent.onConsent((userId) => void this.session.addConsentedUser(userId))
     this.consent.onDecline((userId) => this.session.addDeclinedUser(userId))
 
-    // ── CFG-hosted: seed consent from core-server's session policy ──────────
-    // Runs before voice-join so the consent set is populated by the time the
-    // first speaker frame arrives. Best-effort — a fetch failure just leaves
-    // everyone opt-out until they click the Discord button.
+    // CFG-hosted: wire the consent-sync for LATE pushed updates from
+    // core-server (Activity toggle, mid-session Discord button click).
+    // Initial seed is handled inline above to give us access to the
+    // policy's keyword fields too.
     if (p.cfg) {
       this.consentSync = new ConsentSync({ consent: this.consent, core: p.core, logger: this.logger })
-      await this.consentSync.seedFromPolicy()
     }
 
     this.voice = new VoiceCapture({

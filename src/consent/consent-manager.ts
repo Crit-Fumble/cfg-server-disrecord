@@ -27,13 +27,6 @@ import {
 } from 'discord.js'
 import type { Logger } from '../logger.js'
 
-/**
- * Late-joiner consent window. 3 minutes — a player walking into voice
- * mid-session needs time to see the prompt and click. Matches the
- * core-server `LATE_JOINER_TIMEOUT_MS`.
- */
-const LATE_JOINER_TIMEOUT_MS = 180_000
-
 type ConsentListener = (userId: string) => void
 
 export interface ConsentManagerParams {
@@ -264,13 +257,12 @@ export class ConsentManager {
       }
     }
 
-    // Auto-resolve to declined after the window if the user never clicks.
-    setTimeout(() => {
-      if (this.pending.delete(userId)) {
-        this.declined.add(userId)
-        this.logger.info({ userId, recordingId: this.recordingId }, 'consent window elapsed — declined')
-      }
-    }, LATE_JOINER_TIMEOUT_MS).unref()
+    // No auto-decline timeout. The user can click Allow / Opt Out any
+    // time during the session — pending stays pending (i.e. audio gated
+    // as redacted) until they explicitly decide. The previous 3-min
+    // window would silently flip a "not yet decided" user to declined,
+    // which surfaced as "I clicked Allow and nothing happened" when the
+    // click landed just after the window elapsed.
   }
 
   /**

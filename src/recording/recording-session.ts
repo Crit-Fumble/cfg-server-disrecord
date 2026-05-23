@@ -157,6 +157,28 @@ export class RecordingSession {
    */
   private static readonly REDACTION_COALESCE_SEC = 10
 
+  /**
+   * Per-speaker delayed-Finalize timers. Discord's voice receiver only
+   * emits opus frames while a user is actively speaking — during silence
+   * NO frames flow to Deepgram, so Deepgram's `utterance_end_ms` (which
+   * measures silence WITHIN the audio stream) never trips, and the
+   * interim live caption sits open across arbitrary wall-clock silence.
+   * The next speech burst from the same user (potentially minutes
+   * later) gets appended to the same utterance.
+   *
+   * We close the loop by scheduling a Finalize when Discord's
+   * `speaking end` fires. Two cancel conditions:
+   *
+   *   1. SAME user speaks again within the window  → cancel (continuation)
+   *   2. ANOTHER user takes the floor              → fire immediately
+   *      (turn-taking — another speaker grabbing the floor is the natural
+   *      end of the previous speaker's sentence)
+   *
+   * Calling Finalize doesn't distort timing: Deepgram emits the pending
+   * final with the original word timestamps from when the audio arrived.
+   */
+  private readonly pendingFinalizeTimers = new Map<string, NodeJS.Timeout>()
+
   private sessionStartedAtMs: number | null = null
 
   constructor(params: RecordingSessionParams) {
@@ -204,6 +226,29 @@ export class RecordingSession {
     // honoring this matches the legacy in-process pause: no transcripts,
     // no audio, no `[redacted]` markers from the pause window.
     if (this.paused) return
+
+    // Turn-taking finalize bookkeeping (see pendingFinalizeTimers docs):
+    //   - SAME user speaking again → cancel their pending finalize (continuation)
+    //   - DIFFERENT user taking the floor → fire OTHER speakers' pending
+    //     finalizes immediately (their sentence naturally ends when someone
+    //     else starts talking).
+    const myTimer = this.pendingFinalizeTimers.get(userId)
+    if (myTimer) {
+      clearTimeout(myTimer)
+      this.pendingFinalizeTimers.delete(userId)
+    }
+    for (const [otherUserId, timer] of this.pendingFinalizeTimers) {
+      clearTimeout(timer)
+      this.pendingFinalizeTimers.delete(otherUserId)
+      const otherStream = this.speakerStreams.get(otherUserId)
+      if (otherStream && !otherStream.closed) {
+        try {
+          otherStream.finalize()
+        } catch (err) {
+          this.logger?.warn({ err, otherUserId }, 'turn-take finalize threw')
+        }
+      }
+    }
 
     // Redaction gate: non-consenters never get a Deepgram stream. Track them
     // so onSpeakerEnd can emit a [redacted] placeholder (vs silently dropping).
@@ -349,6 +394,30 @@ export class RecordingSession {
     // it open on Deepgram's side, and closing-then-reopening on per-utterance
     // basis cost 1-3s of reconnect handshake on the next utterance
     // (cfg-core-server#63 — visible 9× in 2026-05-12 prod log).
+    //
+    // Schedule a Deepgram Finalize after utteranceEndMs of wall-clock
+    // silence so Deepgram emits a real final for this utterance even if
+    // the speaker never speaks again (no audio = no Deepgram-side silence
+    // detection). Cancelled in onSpeakerStart on resume, or fired early
+    // when another speaker takes the floor.
+    const stream = this.speakerStreams.get(userId)
+    if (stream && !stream.closed) {
+      const existing = this.pendingFinalizeTimers.get(userId)
+      if (existing) clearTimeout(existing)
+      const timer = setTimeout(() => {
+        this.pendingFinalizeTimers.delete(userId)
+        const s = this.speakerStreams.get(userId)
+        if (s && !s.closed) {
+          try {
+            s.finalize()
+          } catch (err) {
+            this.logger?.warn({ err, userId }, 'silence-window finalize threw')
+          }
+        }
+      }, DEEPGRAM_STREAM_TUNING.utteranceEndMs)
+      timer.unref()
+      this.pendingFinalizeTimers.set(userId, timer)
+    }
   }
 
   /**
@@ -401,6 +470,12 @@ export class RecordingSession {
     }
     this.redactedInFlight.clear()
     this.lastRedactedEmitSec.clear()
+
+    // Clear any pending speech-end finalize timers — we're closing the
+    // streams below anyway, and the Drain step below fires Finalize on
+    // every still-open stream as part of stop().
+    for (const timer of this.pendingFinalizeTimers.values()) clearTimeout(timer)
+    this.pendingFinalizeTimers.clear()
 
     // ── Drain: ask Deepgram to flush pending finals BEFORE closing ──────────
     // Deepgram only emits a final transcript for an in-progress utterance

@@ -64,7 +64,15 @@ export class RecordingService {
    * initial consent prompt is posted.
    */
   async start(req: StartRecordingRequest): Promise<string> {
-    const recordingId = nanoid()
+    // CFG-hosted: use the installationId as our recording id so every
+    // subsequent control-API call from core-server (pause / resume / stop
+    // / consent push) — all of which use installationId in the URL — hits
+    // a registry entry we actually have. Without this the container
+    // generates a fresh nanoid and the registry lookup misses on every
+    // control call, silently dropping the request. Self-host has no
+    // installationId; nanoid is fine because the container is the only
+    // surface that ever needs to address its own sessions.
+    const recordingId = this.config.cfg?.installationId ?? nanoid()
     const textChannelId = req.textChannelId ?? req.voiceChannelId
     // Reserve the guild slot up front so a concurrent start can't race past
     // the lock while we're joining voice.
