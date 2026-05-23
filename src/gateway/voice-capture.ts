@@ -22,7 +22,7 @@ import {
   type VoiceConnection,
   type AudioReceiveStream,
 } from '@discordjs/voice'
-import type { Client } from 'discord.js'
+import type { Client, VoiceState } from 'discord.js'
 import opus from '@discordjs/opus'
 import type { Logger } from '../logger.js'
 import type { RecordingSession } from '../recording/recording-session.js'
@@ -57,6 +57,18 @@ export class VoiceCapture {
   private connection: VoiceConnection | null = null
   private readonly subscriptions = new Map<string, AudioReceiveStream>()
   private readonly decoders = new Map<string, opus.OpusEncoder>()
+  /**
+   * voiceStateUpdate listener — fires the consent prompt the moment a
+   * non-bot user JOINS the voice channel we're recording, rather than
+   * waiting until they first speak. The previous "prompt on first
+   * speech" path is still there for safety (it no-ops if we've already
+   * marked the user seen), but the prompt now lands in their notifications
+   * the instant they join.
+   *
+   * Retained as a field so {@link leave} can detach it cleanly when the
+   * session ends — leaks would accumulate across self-host sessions.
+   */
+  private voiceStateListener: ((oldState: VoiceState, newState: VoiceState) => void) | null = null
 
   constructor(private readonly params: VoiceCaptureParams) {}
 
@@ -99,6 +111,27 @@ export class VoiceCapture {
 
     connection.receiver.speaking.on('start', (userId: string) => this.onSpeakerStart(userId))
     connection.receiver.speaking.on('end', (userId: string) => this.onSpeakerEnd(userId))
+
+    // Voice-join consent trigger. Discord fires voiceStateUpdate for
+    // joins, leaves, mutes, deafens, channel switches — we filter to
+    // "joined OUR voice channel for the first time" and prompt then.
+    // noteSpeaker is idempotent (marks `seen`), so the existing onSpeakerStart
+    // path stays a safe second trigger if the listener somehow misses
+    // the event.
+    this.voiceStateListener = (oldState, newState) => {
+      try {
+        if (oldState.channelId === voiceChannelId) return // already here / left from here
+        if (newState.channelId !== voiceChannelId) return // not joining our channel
+        if (newState.member?.user?.bot) return // skip bot members (including ourselves)
+        const userId = newState.id // discord.js VoiceState.id IS the user id
+        if (!userId) return
+        logger.info({ userId, voiceChannelId }, 'voice-join detected — prompting consent')
+        this.params.consent.noteSpeaker(userId)
+      } catch (err) {
+        logger.warn({ err }, 'voiceStateUpdate listener threw')
+      }
+    }
+    client.on('voiceStateUpdate', this.voiceStateListener)
 
     this.connection = connection
     logger.info({ guildId, voiceChannelId }, 'voice channel joined; capturing audio')
@@ -146,6 +179,10 @@ export class VoiceCapture {
 
   /** Leave the voice channel and tear down all subscriptions. Idempotent. */
   leave(reason: string): void {
+    if (this.voiceStateListener) {
+      this.params.client.off('voiceStateUpdate', this.voiceStateListener)
+      this.voiceStateListener = null
+    }
     for (const stream of this.subscriptions.values()) {
       stream.destroy()
     }

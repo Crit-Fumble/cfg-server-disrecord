@@ -38,6 +38,18 @@ type ConsentListener = (userId: string) => void
 
 export interface ConsentManagerParams {
   recordingId: string
+  /**
+   * Stable id encoded into the button `custom_id` so the right consent
+   * handler picks up the click. In CFG-hosted mode this MUST be the
+   * `installationId` (== Prisma `RecordingSession.id`) — Discord routes
+   * the interaction to core-server's webhook, whose `handleConsentButton`
+   * upserts `RecordingConsent` with this as the FK. A nanoid (the
+   * container's local recordingId) trips the FK and Discord shows
+   * "Something went wrong." In self-host mode there is no DB, no
+   * webhook — the container's gateway handler is the only listener,
+   * and the local recordingId works there.
+   */
+  buttonKey: string
   client: Client
   /**
    * Parent text channel — used as a fallback target for consent prompts
@@ -59,6 +71,7 @@ export interface ConsentManagerParams {
 
 export class ConsentManager {
   private readonly recordingId: string
+  private readonly buttonKey: string
   private readonly client: Client
   private readonly textChannelId: string
   private threadId: string | null
@@ -78,6 +91,7 @@ export class ConsentManager {
 
   constructor(params: ConsentManagerParams) {
     this.recordingId = params.recordingId
+    this.buttonKey = params.buttonKey
     this.client = params.client
     this.textChannelId = params.textChannelId
     this.threadId = params.threadId ?? null
@@ -206,15 +220,17 @@ export class ConsentManager {
   }
 
   private buildButtons(): ActionRowBuilder<ButtonBuilder>[] {
+    // `buttonKey` is installationId in CFG-hosted (matches DB FK) and the
+    // local recordingId in self-host (matches the gateway-side handler).
     return [
       new ActionRowBuilder<ButtonBuilder>().addComponents(
         new ButtonBuilder()
-          .setCustomId(`consent:${this.recordingId}`)
+          .setCustomId(`consent:${this.buttonKey}`)
           .setLabel('Allow Recording')
           .setStyle(ButtonStyle.Success)
           .setEmoji('✅'),
         new ButtonBuilder()
-          .setCustomId(`decline:${this.recordingId}`)
+          .setCustomId(`decline:${this.buttonKey}`)
           .setLabel('Opt Out')
           .setStyle(ButtonStyle.Danger)
           .setEmoji('❌'),
@@ -301,8 +317,8 @@ export class ConsentManager {
 
   private onInteraction(interaction: Interaction): void {
     if (!interaction.isButton()) return
-    const [action, recordingId] = interaction.customId.split(':')
-    if (recordingId !== this.recordingId) return
+    const [action, key] = interaction.customId.split(':')
+    if (key !== this.buttonKey) return
     if (action !== 'consent' && action !== 'decline') return
     // Async work — but discord.js doesn't await event handlers, so kick
     // off a fire-and-forget that handles its own errors.

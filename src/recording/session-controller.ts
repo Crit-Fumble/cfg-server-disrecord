@@ -171,6 +171,11 @@ export class SessionController {
 
     this.consent = new ConsentManager({
       recordingId: this.recordingId,
+      // CFG-hosted ⇒ installationId (Prisma RecordingSession.id, the FK
+      // core-server's handleConsentButton upserts against). Self-host ⇒
+      // local recordingId — there is no core-server, the container's
+      // own gateway handler picks the click up.
+      buttonKey: p.cfg?.installationId ?? this.recordingId,
       client: p.client,
       textChannelId: p.textChannelId,
       // threadId is wired below via setThreadId once createRecordingThread
