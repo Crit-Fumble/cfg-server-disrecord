@@ -354,16 +354,25 @@ export class RecordingSession {
   /**
    * Promote a late-consenting user to an open Deepgram stream. If they had an
    * in-flight unconsented turn, emit the redacted placeholder first.
+   *
+   * Order matters: flip `consentedUserIds` SYNCHRONOUSLY before any await.
+   * Live session bug — the user reliably starts speaking again the moment
+   * they click Allow, and onSpeakerStart (called by voice-capture) checks
+   * `consentedUserIds.has(userId)` to decide whether to gate as redacted
+   * or open a Deepgram stream. If the consent flip happens AFTER an await
+   * (e.g. after `emitRedactedIfDistinct`), that next burst gets a second
+   * [redacted] cue and never transcribes. Flipping first closes the race.
    */
   async addConsentedUser(userId: string): Promise<void> {
     if (this.consentedUserIds == null) return
+    this.consentedUserIds.add(userId)
+
     const inFlight = this.redactedInFlight.get(userId)
     this.redactedInFlight.delete(userId)
     if (inFlight?.sawData) {
       const nowSec = (Date.now() - this.getSessionStartedAtMs()) / 1000
       await this.emitRedactedIfDistinct(userId, inFlight.startSec, nowSec)
     }
-    this.consentedUserIds.add(userId)
     const existing = this.speakerStreams.get(userId)
     if (existing && !existing.closed) return
     await this.onSpeakerStart(userId)

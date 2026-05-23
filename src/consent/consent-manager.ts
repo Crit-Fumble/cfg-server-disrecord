@@ -21,6 +21,7 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
+  MessageFlags,
   type Client,
   type Interaction,
 } from 'discord.js'
@@ -303,19 +304,66 @@ export class ConsentManager {
     const [action, recordingId] = interaction.customId.split(':')
     if (recordingId !== this.recordingId) return
     if (action !== 'consent' && action !== 'decline') return
+    // Async work — but discord.js doesn't await event handlers, so kick
+    // off a fire-and-forget that handles its own errors.
+    void this.handleConsentInteraction(interaction, action as 'consent' | 'decline')
+  }
 
+  /**
+   * Defer the interaction reply FIRST (Discord's 3s ACK window is easy
+   * to miss when applyConsent's downstream work — opening a Deepgram
+   * stream, emitting a [redacted] placeholder — drags the event loop).
+   * Then do the work, then editReply with the result. The user always
+   * sees a real confirmation instead of Discord's generic "Something
+   * went wrong" ephemeral.
+   */
+  private async handleConsentInteraction(
+    interaction: Interaction,
+    action: 'consent' | 'decline',
+  ): Promise<void> {
+    if (!interaction.isButton()) return
     const userId = interaction.user.id
-    if (action === 'consent') {
-      this.applyConsent(userId)
-    } else {
-      this.applyDecline(userId)
+    this.logger.info(
+      { recordingId: this.recordingId, userId, action },
+      'consent button clicked — deferring reply',
+    )
+
+    // Ephemeral defer. Microsecond-fast, ack's Discord well within the 3s
+    // window even if the bot is under load.
+    try {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral })
+    } catch (err) {
+      this.logger.warn({ err, userId, recordingId: this.recordingId }, 'consent deferReply failed')
+      // Without a successful ack the user sees "Something went wrong".
+      // Still apply the consent state so audio gating is correct even if
+      // the user got no confirmation.
+      if (action === 'consent') this.applyConsent(userId)
+      else this.applyDecline(userId)
+      return
     }
-    void interaction
-      .reply({
-        content: action === 'consent' ? '✅ You are now being recorded.' : '❌ Your audio will not be recorded.',
-        ephemeral: true,
+
+    try {
+      if (action === 'consent') {
+        this.applyConsent(userId)
+        this.logger.info({ recordingId: this.recordingId, userId }, 'consent applied (allow)')
+      } else {
+        this.applyDecline(userId)
+        this.logger.info({ recordingId: this.recordingId, userId }, 'consent applied (decline)')
+      }
+    } catch (err) {
+      this.logger.error({ err, userId, recordingId: this.recordingId }, 'applyConsent threw')
+    }
+
+    try {
+      await interaction.editReply({
+        content:
+          action === 'consent'
+            ? '✅ You are now being recorded.'
+            : '❌ Your audio will not be recorded.',
       })
-      .catch((err) => this.logger.warn({ err, userId }, 'consent interaction reply failed'))
+    } catch (err) {
+      this.logger.warn({ err, userId, recordingId: this.recordingId }, 'consent editReply failed')
+    }
   }
 
   /**
