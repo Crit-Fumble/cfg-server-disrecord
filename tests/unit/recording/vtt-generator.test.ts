@@ -33,6 +33,23 @@ describe('generateVtt', () => {
     expect(vtt).not.toContain('hello there')
   })
 
+  it('sorts cues by startSec regardless of arrival order', () => {
+    // Real bug: late-joiner [redacted] placeholder fires synchronously on
+    // consent while earlier-speaker finals from another stream are still
+    // in flight; captions array ends up [A0, B45, A4, A8] in arrival
+    // order, but cues must be chronological in the output.
+    const captions = [
+      caption({ speakerId: 'a', speakerName: 'A', transcript: 'first',  startSec: 0,   endSec: 3 }),
+      caption({ speakerId: 'b', speakerName: 'B', transcript: 'late',   startSec: 45,  endSec: 46 }),
+      caption({ speakerId: 'a', speakerName: 'A', transcript: 'second', startSec: 4,   endSec: 8 }),
+      caption({ speakerId: 'a', speakerName: 'A', transcript: 'third',  startSec: 8.5, endSec: 11 }),
+    ]
+    const vtt = generateVtt(captions)
+    const order = ['first', 'second', 'third', 'late'].map((t) => vtt.indexOf(t))
+    // Each next string must appear later in the file than the previous one.
+    expect(order.every((pos, i) => i === 0 || pos > order[i - 1])).toBe(true)
+  })
+
   it('windows captions to a part offset + length', () => {
     const captions = [
       caption({ startSec: 1, endSec: 2, transcript: 'first' }),

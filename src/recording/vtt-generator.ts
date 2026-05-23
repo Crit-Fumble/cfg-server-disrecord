@@ -27,10 +27,20 @@ export function generateVtt(
   const lengthSec = opts.lengthSec
   const windowEnd = typeof lengthSec === 'number' ? offsetSec + lengthSec : Number.POSITIVE_INFINITY
 
+  // Sort by start time before emission. The caller's array is in ARRIVAL
+  // order — Deepgram finals can land out of chronological order when one
+  // speaker's stream lags behind another's, or when a mid-session
+  // [redacted] placeholder is emitted synchronously while a different
+  // speaker's earlier final is still in flight. WebVTT cues are
+  // chronological by spec; sorting here makes that an invariant of the
+  // generator regardless of input order. Array.sort is stable since
+  // ES2019, so ties (same startSec) keep arrival order.
+  const sorted = [...captions].sort((a, b) => a.startSec - b.startSec)
+
   const lines: string[] = ['WEBVTT', '']
   let cueIndex = 0
 
-  for (const entry of captions) {
+  for (const entry of sorted) {
     if (entry.startSec < offsetSec) continue
     if (entry.startSec >= windowEnd) continue
 
