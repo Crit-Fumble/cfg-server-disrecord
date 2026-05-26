@@ -71,6 +71,10 @@ export async function createRecordingThread(
     const rawName = `${voiceChannelName} - ${dateStr} - ${kindLabel}`
     const threadName = rawName.length > 100 ? rawName.slice(0, 100) : rawName
 
+    // Try private + invitable:false (best privacy, needs ManageThreads).
+    // Then private + invitable:true (only needs CreatePrivateThreads — the
+    // common case for skill-server bots that aren't moderators).
+    // Public thread is a last-resort privacy degradation, so we log loudly.
     let thread
     try {
       thread = await (channel as TextChannel).threads.create({
@@ -79,15 +83,27 @@ export async function createRecordingThread(
         type: ChannelType.PrivateThread,
         invitable: false,
       })
-    } catch (privateErr) {
+    } catch (privateLockedErr) {
       logger.warn(
-        { err: privateErr, textChannelId },
-        'private thread creation failed — falling back to public thread',
+        { err: privateLockedErr, textChannelId },
+        'private thread w/ invitable:false failed (bot likely lacks ManageThreads) — retrying without invitable:false',
       )
-      thread = await (channel as TextChannel).threads.create({
-        name: threadName,
-        autoArchiveDuration: 1440,
-      })
+      try {
+        thread = await (channel as TextChannel).threads.create({
+          name: threadName,
+          autoArchiveDuration: 1440,
+          type: ChannelType.PrivateThread,
+        })
+      } catch (privateErr) {
+        logger.error(
+          { err: privateErr, textChannelId },
+          'private thread creation failed — falling back to PUBLIC thread (privacy downgrade)',
+        )
+        thread = await (channel as TextChannel).threads.create({
+          name: threadName,
+          autoArchiveDuration: 1440,
+        })
+      }
     }
 
     // Invite every voice member so they have access to the (private) thread.
