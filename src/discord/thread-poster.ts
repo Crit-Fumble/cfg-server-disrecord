@@ -34,19 +34,21 @@ import type { Logger } from '../logger.js'
  * Create a PRIVATE thread under `textChannelId` for a recording and invite
  * every member who was in voice at session start so they (and only they)
  * can see the live transcript + final recording. Returns the new thread's
- * id, or null when creation fails (caller falls back to posting in the
- * parent channel).
+ * id, or null when creation fails — the caller MUST treat null as "do
+ * not deliver to Discord", not as a license to post in the parent
+ * channel. Posting a recording publicly is a privacy violation regardless
+ * of which container surface (thread vs channel) carries it.
  *
  * Private threads keep the session's audio + transcript out of the
- * parent channel's history for anyone who wasn't in the call — useful
- * for sessions with sensitive content (recordings include consenting
- * speakers only, but limiting *visibility* of the artifact to call
- * participants is a separate privacy axis).
+ * parent channel's history for anyone who wasn't in the call. Recordings
+ * include consenting speakers only, but limiting *visibility* of the
+ * artifact to call participants is a separate privacy axis we never
+ * downgrade automatically.
  *
- * Falls back to a public thread on any private-thread error (e.g. the
- * server has private threads disabled): better to deliver the artifact
- * than to fail the session over a thread-visibility downgrade. The
- * caller's `postSessionStart` ping still notifies the invitee list.
+ * Tries `invitable:false` first (needs `ManageThreads`), then plain
+ * private (needs `CreatePrivateThreads`). NO public-thread fallback —
+ * if both fail, returns null and the recording stays in object storage
+ * for out-of-band retrieval.
  */
 export async function createRecordingThread(
   client: Client,
@@ -72,9 +74,11 @@ export async function createRecordingThread(
     const threadName = rawName.length > 100 ? rawName.slice(0, 100) : rawName
 
     // Try private + invitable:false (best privacy, needs ManageThreads).
-    // Then private + invitable:true (only needs CreatePrivateThreads — the
-    // common case for skill-server bots that aren't moderators).
-    // Public thread is a last-resort privacy degradation, so we log loudly.
+    // Then plain private (only needs CreatePrivateThreads — the common
+    // case for skill-server bots that aren't moderators). If both fail
+    // we return null — NO public-thread fallback. The recording is
+    // already in object storage; failing the Discord post is the only
+    // safe outcome when we can't guarantee thread privacy.
     let thread
     try {
       thread = await (channel as TextChannel).threads.create({
@@ -88,22 +92,11 @@ export async function createRecordingThread(
         { err: privateLockedErr, textChannelId },
         'private thread w/ invitable:false failed (bot likely lacks ManageThreads) — retrying without invitable:false',
       )
-      try {
-        thread = await (channel as TextChannel).threads.create({
-          name: threadName,
-          autoArchiveDuration: 1440,
-          type: ChannelType.PrivateThread,
-        })
-      } catch (privateErr) {
-        logger.error(
-          { err: privateErr, textChannelId },
-          'private thread creation failed — falling back to PUBLIC thread (privacy downgrade)',
-        )
-        thread = await (channel as TextChannel).threads.create({
-          name: threadName,
-          autoArchiveDuration: 1440,
-        })
-      }
+      thread = await (channel as TextChannel).threads.create({
+        name: threadName,
+        autoArchiveDuration: 1440,
+        type: ChannelType.PrivateThread,
+      })
     }
 
     // Invite every voice member so they have access to the (private) thread.

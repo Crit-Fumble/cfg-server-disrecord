@@ -584,14 +584,26 @@ export class SessionController {
   private async deliver(result: Awaited<ReturnType<typeof processRecording>>): Promise<void> {
     if (!result) return
     const p = this.params
-    // Reuse the thread created at session start so the mp3 lands in the same
-    // place live captions streamed into. If start-time thread creation failed
-    // (`threadId === null`), fall back to posting in the parent channel — the
-    // same fallback `createRecordingThread` already enforces.
-    const target = this.threadId ?? p.textChannelId
+    // Reuse the thread created at session start so the mp3 lands in the
+    // same place live captions streamed into. If start-time thread creation
+    // failed (`threadId === null`), we DO NOT fall back to the parent
+    // channel — posting a recording publicly is a privacy violation
+    // regardless of surface. The recording remains in object storage for
+    // out-of-band retrieval; the operator gets a loud log to triage.
+    if (!this.threadId) {
+      this.logger.error(
+        {
+          recordingId: this.recordingId,
+          guildId: this.guildId,
+          textChannelId: p.textChannelId,
+        },
+        'recording NOT posted: no private thread was created at session start (bot likely missing Create Private Threads). Recording remains in object storage.',
+      )
+      return
+    }
     await postRecording(
       p.client,
-      target,
+      this.threadId,
       this.recordingId,
       tempDirOf(result.mp3Path),
       result,
