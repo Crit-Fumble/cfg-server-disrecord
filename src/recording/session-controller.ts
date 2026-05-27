@@ -109,6 +109,14 @@ export class SessionController {
   private readonly captions: CaptionEntry[] = []
   private threadId: string | null = null
   /**
+   * Bot's guild nickname captured at session start so {@link runStop} can
+   * restore it. `undefined` means "haven't touched the nickname yet"
+   * (don't restore); `null` means "no nickname was set" (revert by
+   * setting nickname back to null/empty); a string means "had this
+   * nickname before recording started".
+   */
+  private previousNickname: string | null | undefined = undefined
+  /**
    * Message id of the session-start announcement — the first message in
    * the thread. The end-of-session "Back to Top" link anchors here so
    * users can jump to the start of a multi-hour transcript in one click.
@@ -345,6 +353,12 @@ export class SessionController {
 
     this.status = 'recording'
 
+    // Surface a recording indicator on the bot's guild nickname so
+    // members can see at a glance that the bot is live. Best-effort —
+    // a failed nickname change (missing CHANGE_NICKNAME perm, etc.)
+    // doesn't fail the session.
+    void this.setRecordingNickname()
+
     // ── CFG-hosted: arm the pause-aware billing tick ────────────────────────
     // The separate `transcription` surcharge tick fires only when the
     // platform Deepgram key is in use (`transcriptionCtPerMinute` set) AND
@@ -479,6 +493,9 @@ export class SessionController {
     this.logger.info({ recordingId: this.recordingId }, 'recording stopping')
 
     this.consent.stop()
+    // Revert the recording-indicator nickname before leaving voice so
+    // the bot's name is back to normal before its presence updates.
+    await this.restoreNickname().catch(() => {})
     this.voice.leave('session-stop')
     await this.pcmCapture.onSessionStop()
     await this.session.stop()
@@ -859,6 +876,61 @@ export class SessionController {
       if (!consented.has(c.speakerId)) redacted.add(c.speakerId)
     }
     return redacted
+  }
+
+  /**
+   * Set the bot's guild nickname to a recording indicator (🔴 prefix).
+   * Captures the prior nickname so {@link restoreNickname} can revert
+   * it on stop. Best-effort: a missing CHANGE_NICKNAME perm or any
+   * other failure is logged and the session continues — no nickname
+   * change just means no visible indicator, not a broken recording.
+   */
+  private async setRecordingNickname(): Promise<void> {
+    try {
+      const guild = await this.params.client.guilds.fetch(this.guildId)
+      const me = guild.members.me
+      if (!me) return
+      // discord.js: `nickname` is the per-guild nickname (null when
+      // unset); `displayName` falls through to global name/username.
+      // We restore exactly what was there before, including null.
+      this.previousNickname = me.nickname
+      const base = me.user.username || 'ReSesh'
+      // Nicknames cap at 32 chars. Prefix + space + name; truncate
+      // the base name if needed to stay under the cap.
+      const prefix = '🔴 '
+      const indicator = ' [Recording]'
+      const budget = 32 - prefix.length - indicator.length
+      const trimmed = base.length > budget ? base.slice(0, budget) : base
+      const next = `${prefix}${trimmed}${indicator}`
+      await me.setNickname(next, `recording session ${this.recordingId} started`)
+    } catch (err) {
+      this.logger.warn(
+        { err, guildId: this.guildId, recordingId: this.recordingId },
+        'failed to set recording-indicator nickname (best-effort)',
+      )
+    }
+  }
+
+  /**
+   * Revert the bot's guild nickname to whatever it was before
+   * {@link setRecordingNickname} ran. No-op when the nickname was
+   * never changed (previousNickname undefined). Best-effort.
+   */
+  private async restoreNickname(): Promise<void> {
+    if (this.previousNickname === undefined) return
+    const target = this.previousNickname
+    this.previousNickname = undefined
+    try {
+      const guild = await this.params.client.guilds.fetch(this.guildId)
+      const me = guild.members.me
+      if (!me) return
+      await me.setNickname(target ?? null, `recording session ${this.recordingId} ended`)
+    } catch (err) {
+      this.logger.warn(
+        { err, guildId: this.guildId, recordingId: this.recordingId },
+        'failed to restore nickname (best-effort)',
+      )
+    }
   }
 
   private async resolveSpeakerName(userId: string): Promise<string> {
