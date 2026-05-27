@@ -862,6 +862,21 @@ export class SessionController {
   }
 
   private async resolveSpeakerName(userId: string): Promise<string> {
+    // Prefer the GUILD member's display name (per-guild nickname →
+    // global display name → username). Falls back to the global User
+    // record only if guild-member fetch fails. Without the guild fetch
+    // we'd surface raw usernames in webhook captions even when the
+    // speaker has a server nickname set — which is what every other
+    // Discord client shows.
+    try {
+      const guild = await this.params.client.guilds.fetch(this.guildId)
+      const member = await guild.members.fetch(userId)
+      // discord.js `member.displayName` = nickname ?? user.globalName ?? user.username
+      if (member.displayName) return member.displayName
+    } catch {
+      // guild/member fetch can fail when the bot lost guild access or
+      // the user left the guild. Fall through to the global User lookup.
+    }
     try {
       const user = await this.params.client.users.fetch(userId)
       return user.displayName || user.username || userId
