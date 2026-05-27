@@ -186,13 +186,25 @@ export class ConsentManager {
     )
     const mentions = mentionIds.map((id) => `<@${id}>`).join(' ')
     const leadMention = mentions || `<@${invokerUserId}>`
-    const content = `${leadMention} starting a ${kindLabel}.`
+    // Embed the 3-button consent row directly on the ping so everyone
+    // sees the opt-in/opt-out controls without a separate per-member
+    // prompt. This replaces the old promptInitial fan-out — that path
+    // skipped anyone already pre-consented (via the session-policy seed)
+    // and left them with no in-thread revoke button, which contradicted
+    // the session-policy documentation. Late joiners who weren't in
+    // voice at start still get their own prompt via noteSpeaker().
+    const content =
+      `${leadMention} starting a ${kindLabel}.\n\n` +
+      '🔁 **Yes, and remember** — voice is captured for this session AND future sessions in this channel.\n' +
+      '✅ **Yes, this time only** — voice is captured for this session only.\n' +
+      "❌ **Skip my voice** — voice isn't captured; the session continues. Click again anytime to revoke."
+    const components = this.buildButtons()
     const target = threadId ?? this.textChannelId
     try {
       // Return the message id — the session-controller anchors the
       // end-of-session "Back to Top" link on this so users can jump
       // back to the start of a multi-hour transcript in one click.
-      return await this.sendTo(target, content, [])
+      return await this.sendTo(target, content, components)
     } catch (err) {
       this.logger.warn({ err, invokerUserId, recordingId: this.recordingId, target }, 'session-start announcement failed')
       return null
@@ -200,14 +212,25 @@ export class ConsentManager {
   }
 
   /**
-   * Post the initial consent prompt for everyone currently in voice.
-   * Each user is pre-marked pending so noteSpeaker doesn't double-prompt.
+   * Mark every voice member at session start as "seen" so the late-
+   * joiner path (`noteSpeaker`) doesn't fire a duplicate per-member
+   * prompt the first time they speak. The actual consent prompt for
+   * these users is the 3-button row embedded on the session-start
+   * announcement posted by {@link postSessionStart}; no per-member
+   * fan-out is needed.
+   *
+   * Late joiners who weren't in voice at start (and therefore aren't
+   * in this set) still get their own prompt via `noteSpeaker` the
+   * first time they speak.
    */
   async promptInitial(memberIds: string[]): Promise<void> {
-    this.markPending(memberIds.filter((id) => !this.consented.has(id)))
+    // Seed `seen` for every member-at-start (pre-consented or not) so
+    // noteSpeaker is a no-op for them. The 3-button row on the
+    // session-start announcement is their consent prompt; we don't want
+    // a duplicate per-member prompt the first time they speak.
     for (const id of memberIds) {
-      if (this.consented.has(id) || this.declined.has(id)) continue
-      void this.requestConsent(id)
+      this.seen.add(id)
+      if (!this.consented.has(id) && !this.declined.has(id)) this.pending.add(id)
     }
   }
 
