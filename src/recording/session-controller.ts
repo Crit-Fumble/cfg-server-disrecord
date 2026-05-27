@@ -491,24 +491,34 @@ export class SessionController {
   private async runStop(): Promise<void> {
     if (this.status === 'stopped' || this.status === 'stopping') return
     this.status = 'stopping'
-    this.logger.info({ recordingId: this.recordingId }, 'recording stopping')
+    const rid = this.recordingId
+    // Numbered checkpoint logs so a hung / failed stop is easy to triage
+    // from production logs without having to instrument later. Every
+    // step that does external I/O (Discord, ffmpeg, object storage)
+    // gets its own log line so the breakpoint is visible.
+    this.logger.info({ recordingId: rid }, '[runStop] 0/9 stopping')
 
     this.consent.stop()
-    // Clear the recording-indicator presence before leaving voice.
     this.clearRecordingPresence()
     this.voice.leave('session-stop')
+    this.logger.info({ recordingId: rid }, '[runStop] 1/9 voice left + presence cleared')
+
     await this.pcmCapture.onSessionStop()
+    this.logger.info({ recordingId: rid }, '[runStop] 2/9 pcm capture stopped')
+
     await this.session.stop()
+    this.logger.info({ recordingId: rid }, '[runStop] 3/9 recording session stopped')
 
     // CFG-hosted: stop the billing timer + post the final partial-minute
     // tick. Best-effort — a failed tick must not block post-processing.
     await this.stopBillingTimer().catch((err) =>
-      this.logger.warn({ err, recordingId: this.recordingId }, 'final billing tick failed'),
+      this.logger.warn({ err, recordingId: rid }, 'final billing tick failed'),
     )
+    this.logger.info({ recordingId: rid }, '[runStop] 4/9 billing timer stopped')
 
     try {
       const result = await processRecording(
-        this.recordingId,
+        rid,
         this.pcmCapture.getResult(),
         this.params.sink,
         {
@@ -524,20 +534,37 @@ export class SessionController {
           redactedSpeakerIds: this.redactedSpeakerIds(),
         },
       )
+      this.logger.info(
+        {
+          recordingId: rid,
+          producedOutput: !!result,
+          mp3SizeBytes: result?.sizeBytes ?? null,
+          durationMs: result?.durationMs ?? null,
+        },
+        '[runStop] 5/9 processRecording returned',
+      )
       if (result) {
         await this.deliver(result)
+        this.logger.info({ recordingId: rid }, '[runStop] 6/9 delivery complete')
       } else {
-        this.logger.warn({ recordingId: this.recordingId }, 'nothing recorded — no output produced')
+        this.logger.warn({ recordingId: rid }, 'nothing recorded — no output produced')
       }
     } catch (err) {
       this.status = 'failed'
-      this.logger.error({ err, recordingId: this.recordingId }, 'post-processing failed')
+      this.logger.error({ err, recordingId: rid }, '[runStop] post-processing or delivery FAILED')
     } finally {
       await rm(this.tempDir, { recursive: true, force: true }).catch(() => {})
+      this.logger.info({ recordingId: rid }, '[runStop] 7/9 temp dir cleaned')
+
       // Drain any still-queued per-speaker ops so a late edit can't fire
       // against a deleted webhook. Best-effort — anything still pending
       // after the session is going down anyway.
       await Promise.allSettled(Array.from(this.speakerOpQueue.values()))
+      this.logger.info(
+        { recordingId: rid, drained: this.speakerOpQueue.size },
+        '[runStop] 8/9 speaker op queue drained',
+      )
+
       // Delete the per-speaker webhooks the manager created so we don't
       // leave residue in the channel's webhook list (15-cap globally).
       if (this.webhookManager) {
@@ -545,7 +572,10 @@ export class SessionController {
         this.webhookManager = null
       }
       if (this.status !== 'failed') this.status = 'stopped'
-      this.logger.info({ recordingId: this.recordingId }, 'recording session stopped')
+      this.logger.info(
+        { recordingId: rid, status: this.status },
+        '[runStop] 9/9 recording session stopped',
+      )
     }
   }
 
@@ -618,6 +648,10 @@ export class SessionController {
       )
       return
     }
+    this.logger.info(
+      { recordingId: this.recordingId, threadId: this.threadId, mp3Bytes: result.sizeBytes },
+      '[deliver] posting recording to thread',
+    )
     await postRecording(
       p.client,
       this.threadId,
@@ -627,6 +661,10 @@ export class SessionController {
       result.captions,
       this.redactedSpeakerIds(),
       this.logger,
+    )
+    this.logger.info(
+      { recordingId: this.recordingId, threadId: this.threadId },
+      '[deliver] postRecording returned (mp3 + VTT posted)',
     )
 
     // End-of-session "Back to Top" link. Anchors on the session-start
