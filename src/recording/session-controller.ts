@@ -17,7 +17,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Client } from 'discord.js'
+import { ActivityType, type Client } from 'discord.js'
 import { VoiceCapture } from '../gateway/voice-capture.js'
 import { PcmCapture } from './pcm-capture.js'
 import { RecordingSession, type TranscriptFinalEvent, type TranscriptInterimEvent } from './recording-session.js'
@@ -109,13 +109,13 @@ export class SessionController {
   private readonly captions: CaptionEntry[] = []
   private threadId: string | null = null
   /**
-   * Bot's guild nickname captured at session start so {@link runStop} can
-   * restore it. `undefined` means "haven't touched the nickname yet"
-   * (don't restore); `null` means "no nickname was set" (revert by
-   * setting nickname back to null/empty); a string means "had this
-   * nickname before recording started".
+   * Tracks whether we've set the bot's presence to the recording-indicator
+   * activity in this session, so {@link runStop} only clears it once.
+   * Presence is a global (bot-identity-wide) state, not per-guild — see
+   * the comments on {@link setRecordingPresence} for the multi-tenant
+   * caveat.
    */
-  private previousNickname: string | null | undefined = undefined
+  private presenceSet = false
   /**
    * Message id of the session-start announcement — the first message in
    * the thread. The end-of-session "Back to Top" link anchors here so
@@ -353,11 +353,12 @@ export class SessionController {
 
     this.status = 'recording'
 
-    // Surface a recording indicator on the bot's guild nickname so
-    // members can see at a glance that the bot is live. Best-effort —
-    // a failed nickname change (missing CHANGE_NICKNAME perm, etc.)
-    // doesn't fail the session.
-    void this.setRecordingNickname()
+    // Surface a recording indicator on the bot's presence/activity so
+    // members see "🔴 Recording session" under ReSesh in the member list.
+    // Best-effort — presence updates aren't gated by Discord permissions
+    // (it's a bot self-update), but any failure is logged and the
+    // session continues either way.
+    this.setRecordingPresence()
 
     // ── CFG-hosted: arm the pause-aware billing tick ────────────────────────
     // The separate `transcription` surcharge tick fires only when the
@@ -493,9 +494,8 @@ export class SessionController {
     this.logger.info({ recordingId: this.recordingId }, 'recording stopping')
 
     this.consent.stop()
-    // Revert the recording-indicator nickname before leaving voice so
-    // the bot's name is back to normal before its presence updates.
-    await this.restoreNickname().catch(() => {})
+    // Clear the recording-indicator presence before leaving voice.
+    this.clearRecordingPresence()
     this.voice.leave('session-stop')
     await this.pcmCapture.onSessionStop()
     await this.session.stop()
@@ -879,56 +879,51 @@ export class SessionController {
   }
 
   /**
-   * Set the bot's guild nickname to a recording indicator (🔴 prefix).
-   * Captures the prior nickname so {@link restoreNickname} can revert
-   * it on stop. Best-effort: a missing CHANGE_NICKNAME perm or any
-   * other failure is logged and the session continues — no nickname
-   * change just means no visible indicator, not a broken recording.
+   * Set the bot's presence to a recording-indicator activity so members
+   * see "🔴 Recording session" under ReSesh in the member list. Presence
+   * updates are a bot self-update — no Discord permissions are required
+   * (no CHANGE_NICKNAME, MANAGE_GUILD, etc.).
+   *
+   * Multi-tenant caveat: presence is keyed on the bot identity, not the
+   * guild. If two disrecord containers run concurrently for the same
+   * ReSesh bot token (separate users / separate guilds), the most recent
+   * presence update wins globally. For solo / single-tenant deployments
+   * this is fine; at scale we'd need a central coordinator to manage a
+   * shared "any session active?" presence. Acceptable for now.
    */
-  private async setRecordingNickname(): Promise<void> {
+  private setRecordingPresence(): void {
     try {
-      const guild = await this.params.client.guilds.fetch(this.guildId)
-      const me = guild.members.me
-      if (!me) return
-      // discord.js: `nickname` is the per-guild nickname (null when
-      // unset); `displayName` falls through to global name/username.
-      // We restore exactly what was there before, including null.
-      this.previousNickname = me.nickname
-      const base = me.user.username || 'ReSesh'
-      // Nicknames cap at 32 chars. Prefix + space + name; truncate
-      // the base name if needed to stay under the cap.
-      const prefix = '🔴 '
-      const indicator = ' [Recording]'
-      const budget = 32 - prefix.length - indicator.length
-      const trimmed = base.length > budget ? base.slice(0, budget) : base
-      const next = `${prefix}${trimmed}${indicator}`
-      await me.setNickname(next, `recording session ${this.recordingId} started`)
+      const user = this.params.client.user
+      if (!user) return
+      user.setPresence({
+        activities: [{ name: '🔴 Recording session', type: ActivityType.Watching }],
+        status: 'online',
+      })
+      this.presenceSet = true
     } catch (err) {
       this.logger.warn(
-        { err, guildId: this.guildId, recordingId: this.recordingId },
-        'failed to set recording-indicator nickname (best-effort)',
+        { err, recordingId: this.recordingId },
+        'failed to set recording presence (best-effort)',
       )
     }
   }
 
   /**
-   * Revert the bot's guild nickname to whatever it was before
-   * {@link setRecordingNickname} ran. No-op when the nickname was
-   * never changed (previousNickname undefined). Best-effort.
+   * Clear the recording-indicator presence set by {@link setRecordingPresence}.
+   * No-op when presence was never set (e.g. start() failed before reaching
+   * the presence call).
    */
-  private async restoreNickname(): Promise<void> {
-    if (this.previousNickname === undefined) return
-    const target = this.previousNickname
-    this.previousNickname = undefined
+  private clearRecordingPresence(): void {
+    if (!this.presenceSet) return
+    this.presenceSet = false
     try {
-      const guild = await this.params.client.guilds.fetch(this.guildId)
-      const me = guild.members.me
-      if (!me) return
-      await me.setNickname(target ?? null, `recording session ${this.recordingId} ended`)
+      const user = this.params.client.user
+      if (!user) return
+      user.setPresence({ activities: [], status: 'online' })
     } catch (err) {
       this.logger.warn(
-        { err, guildId: this.guildId, recordingId: this.recordingId },
-        'failed to restore nickname (best-effort)',
+        { err, recordingId: this.recordingId },
+        'failed to clear recording presence (best-effort)',
       )
     }
   }
