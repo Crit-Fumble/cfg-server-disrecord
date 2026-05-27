@@ -1,6 +1,6 @@
 {
   "name": "@crit-fumble/server-disrecord",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "private": true,
   "type": "module",
   "description": "Crit-Fumble DisRecord — self-contained Discord voice recording container. Boots its own bot, captures voice, mixes mp3, and transcribes. Runs local-only or CFG-hosted (phones home to cfg-core-server for billing/Spaces/consent).",

@@ -124,12 +124,16 @@ describe('control server', () => {
       expect(res.json()).toMatchObject({ conflictingRecordingId: 'rec-existing' })
     })
 
-    it('pause / resume / stop hit the service and return 204 / 204 / 202', async () => {
+    it('pause / resume / stop hit the service and return 204 / 204 / 200', async () => {
+      // Stop now blocks until runStop completes (mix + upload + Discord
+      // post) so the container isn't killed mid-delivery; the endpoint
+      // returns 200 on full completion rather than the old fire-and-
+      // forget 202.
       const service = fakeService()
       app = await makeServer(service)
       expect((await app.inject({ method: 'POST', url: '/v1/recordings/r1/pause' })).statusCode).toBe(204)
       expect((await app.inject({ method: 'POST', url: '/v1/recordings/r1/resume' })).statusCode).toBe(204)
-      expect((await app.inject({ method: 'POST', url: '/v1/recordings/r1/stop' })).statusCode).toBe(202)
+      expect((await app.inject({ method: 'POST', url: '/v1/recordings/r1/stop' })).statusCode).toBe(200)
       expect(service.pause).toHaveBeenCalledWith('r1')
       expect(service.resume).toHaveBeenCalledWith('r1')
       expect(service.stop).toHaveBeenCalledWith('r1')

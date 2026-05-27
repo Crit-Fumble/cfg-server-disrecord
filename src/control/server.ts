@@ -11,7 +11,7 @@
  *   POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription? } → { recordingId }
  *   POST /v1/recordings/:id/pause  → 204
  *   POST /v1/recordings/:id/resume → 204
- *   POST /v1/recordings/:id/stop   → 202   (post-processing async)
+ *   POST /v1/recordings/:id/stop   → 200   (blocks until delivery complete)
  *   POST /v1/recordings/:id/consent { discordUserId, consented } → 204  (CFG-hosted consent push)
  *   GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused }
  *   GET  /v1/recordings            → [ ... ]
@@ -126,8 +126,14 @@ export async function startControlServer(params: ControlServerParams): Promise<F
   app.post('/v1/recordings/:id/stop', async (req, reply) => {
     const { id } = req.params as { id: string }
     try {
-      service.stop(id)
-      return reply.status(202).send()
+      // Block until runStop completes — mix + upload + Discord post +
+      // cleanup all run synchronously from the caller's perspective. The
+      // caller (core-server) is what kills the container afterward, so
+      // returning early here causes the container to be killed mid-
+      // delivery. Returns 200 on full completion. The caller-side fetch
+      // timeout (10 min in core-server's controlStop) bounds the wait.
+      await service.stop(id)
+      return reply.status(200).send()
     } catch (err) {
       return notFoundOr500(reply, err, logger)
     }

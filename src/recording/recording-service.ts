@@ -130,16 +130,29 @@ export class RecordingService {
   }
 
   /**
-   * Stop a recording. Returns immediately; post-processing + Discord
-   * delivery run in the background. Removes the session from the registry
-   * once finalize completes so the guild lock is released.
+   * Stop a recording. Awaits the full runStop pipeline (mix, upload,
+   * Discord post, cleanup) before resolving so the HTTP caller — and the
+   * core-server stop flow that follows it with a hard container kill —
+   * see "stopped" only after delivery is actually done. Errors are
+   * logged but not rethrown; the registry slot is always released so
+   * subsequent starts in the same guild work.
+   *
+   * Previously this was fire-and-forget (`void controller.stop()`); the
+   * HTTP endpoint returned 202 immediately, core-server then killed the
+   * container mid-runStop, and the mp3 + VTT + Back-to-Top never landed
+   * in Discord. With this change the endpoint blocks until delivery —
+   * caller-side timeout (~10 min by default in core-server's control
+   * client) is the upper bound on stop latency.
    */
-  stop(recordingId: string): void {
+  async stop(recordingId: string): Promise<void> {
     const controller = this.require(recordingId)
-    void controller
-      .stop()
-      .catch((err) => this.logger.error({ err, recordingId }, 'session stop failed'))
-      .finally(() => this.registry.remove(recordingId))
+    try {
+      await controller.stop()
+    } catch (err) {
+      this.logger.error({ err, recordingId }, 'session stop failed')
+    } finally {
+      this.registry.remove(recordingId)
+    }
   }
 
   /** Snapshot of one session, or null when it isn't active. */
