@@ -18,10 +18,10 @@ same build:
   MP3, transcribes with a BYO Deepgram key, and posts a Discord thread — with
   **zero** core-server involvement. Recordings land in a local directory.
   Operate it via the localhost HTTP control API (or the bundled CLI).
-- **CFG-hosted** — `CORE_SERVER_URL` + a per-session JWT + DO Spaces creds
+- **CFG-hosted** — `CORE_SERVER_URL` + a per-session JWT + object-storage creds
   present. cfg-core-server spawns the container and proxies the HTTP control
   API to it; the container phones home for CT billing, uploads recordings to
-  DO Spaces, and syncs consent. Omit those env vars and every phone-home path
+  object-storage, and syncs consent. Omit those env vars and every phone-home path
   is a clean no-op — the same image runs purely local.
 
 - **License**: AGPL-3.0-only
@@ -95,7 +95,7 @@ error. Different servers record concurrently.
 
 When CFG hosts the container, **server uptime** is billed in CT/min by
 instance size (the same slot-fraction model game servers use), and recordings
-upload to DO Spaces. Live transcription on the platform Deepgram key is a
+upload to object-storage. Live transcription on the platform Deepgram key is a
 separate itemized `transcription` axis. Local-only none of that applies — you
 bring your own bot and Deepgram key and pay Deepgram directly. CFG-hosted vs
 local-only is decided purely by whether `CORE_SERVER_URL` is set; see
