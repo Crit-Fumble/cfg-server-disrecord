@@ -2,9 +2,10 @@
  * Output sinks — pluggable destination for a finalized recording's mp3 + VTT.
  *
  * Two implementations:
- *   {@link LocalDirSink}  — writes into a local directory (self-host default).
- *   {@link SpacesSink}    — uploads to DO Spaces (CFG-hosted; selected when
- *                           `DO_SPACES_*` env is present).
+ *   {@link LocalDirSink}       — writes into a local directory (self-host default).
+ *   {@link ObjectStorageSink}  — uploads to S3-compatible object storage
+ *                                (CFG-hosted; selected when `DO_SPACES_*` env
+ *                                is present).
  *
  * The post-processor calls `putRecording()` and doesn't care which sink it
  * holds.
@@ -15,7 +16,7 @@ import { copyFile, mkdir } from 'node:fs/promises'
 import { basename, join } from 'node:path'
 import { S3Client } from '@aws-sdk/client-s3'
 import { Upload } from '@aws-sdk/lib-storage'
-import type { SpacesConfig } from '../config.js'
+import type { ObjectStorageConfig } from '../config.js'
 import type { Logger } from '../logger.js'
 
 export interface RecordingMeta {
@@ -86,7 +87,8 @@ export class LocalDirSink implements OutputSink {
 }
 
 /**
- * DO Spaces sink — CFG-hosted upload destination.
+ * Object-storage sink — CFG-hosted upload destination. Works against any
+ * S3-compatible store (DO Spaces, OVH Object Storage, AWS S3, …).
  *
  * Ported from cfg-core-server's `services/recording/post-processor.ts`
  * upload block: same `@aws-sdk/lib-storage` `Upload` flow, same private ACL,
@@ -95,22 +97,22 @@ export class LocalDirSink implements OutputSink {
  *
  * The S3 client is constructed once per sink and reused across recordings.
  */
-export class SpacesSink implements OutputSink {
+export class ObjectStorageSink implements OutputSink {
   private readonly s3: S3Client
   private readonly bucket: string
 
   constructor(
-    spaces: SpacesConfig,
+    storage: ObjectStorageConfig,
     private readonly logger: Logger,
   ) {
-    this.bucket = spaces.bucket
+    this.bucket = storage.bucket
     this.s3 = new S3Client({
-      region: spaces.region,
-      endpoint: spaces.endpoint,
-      // Spaces, like most S3-compatible stores, expects path/virtual-host
-      // addressing that the default config already handles; credentials are
-      // passed explicitly so the container needs no AWS env/profile.
-      credentials: { accessKeyId: spaces.key, secretAccessKey: spaces.secret },
+      region: storage.region,
+      endpoint: storage.endpoint,
+      // S3-compatible stores expect path/virtual-host addressing that the
+      // default config already handles; credentials are passed explicitly so
+      // the container needs no AWS env/profile.
+      credentials: { accessKeyId: storage.key, secretAccessKey: storage.secret },
     })
   }
 
@@ -152,7 +154,7 @@ export class SpacesSink implements OutputSink {
 
     this.logger.info(
       { recordingId, bucket: this.bucket, mp3: mp3Key, vtt: vttLocation ?? null },
-      'recording uploaded to DO Spaces',
+      'recording uploaded to object storage',
     )
     return { mp3Location: mp3Key, vttLocation }
   }

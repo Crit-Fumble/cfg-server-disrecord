@@ -147,7 +147,7 @@ export class SessionController {
 
   /**
    * In-flight stop promise. The control-API `/stop` call kicks off the
-   * full post-process (mix mp3, upload to Spaces, post to Discord
+   * full post-process (mix mp3, upload to object storage, post to Discord
    * thread) which takes seconds. When core-server's spawner then
    * SIGTERMs the container, the SIGTERM handler also calls stop() —
    * without this, the second call hits `status === 'stopping'` and

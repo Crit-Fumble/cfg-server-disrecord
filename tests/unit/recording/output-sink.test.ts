@@ -1,8 +1,8 @@
 /**
- * LocalDirSink + SpacesSink (CFG-hosted DO Spaces upload).
+ * LocalDirSink + ObjectStorageSink (CFG-hosted S3-compatible upload).
  *
- * The SpacesSink tests mock `@aws-sdk/lib-storage`'s `Upload` so no real
- * network call is made — we only assert the sink wires the right
+ * The ObjectStorageSink tests mock `@aws-sdk/lib-storage`'s `Upload` so no
+ * real network call is made — we only assert the sink wires the right
  * Bucket/Key/ContentType/ACL params and returns the object keys.
  */
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -21,8 +21,8 @@ jest.mock('@aws-sdk/client-s3', () => ({
   S3Client: jest.fn().mockImplementation(() => ({ __s3: true })),
 }))
 
-import { LocalDirSink, SpacesSink, type RecordingMeta } from '../../../src/recording/output-sink.js'
-import type { SpacesConfig } from '../../../src/config.js'
+import { LocalDirSink, ObjectStorageSink, type RecordingMeta } from '../../../src/recording/output-sink.js'
+import type { ObjectStorageConfig } from '../../../src/config.js'
 import { logger } from '../../../src/logger.js'
 
 const META: RecordingMeta = {
@@ -82,8 +82,8 @@ describe('LocalDirSink', () => {
   })
 })
 
-describe('SpacesSink', () => {
-  const SPACES: SpacesConfig = {
+describe('ObjectStorageSink', () => {
+  const STORAGE: ObjectStorageConfig = {
     key: 'k',
     secret: 's',
     bucket: 'cfg-recordings',
@@ -95,7 +95,7 @@ describe('SpacesSink', () => {
   beforeEach(async () => {
     uploadDone.mockClear()
     uploadCtor.mockClear()
-    srcDir = await mkdtemp(join(tmpdir(), 'spaces-src-'))
+    srcDir = await mkdtemp(join(tmpdir(), 'storage-src-'))
   })
 
   afterEach(async () => {
@@ -106,7 +106,7 @@ describe('SpacesSink', () => {
     const mp3 = join(srcDir, 'mixed.mp3')
     await writeFile(mp3, 'mp3-bytes')
 
-    const sink = new SpacesSink(SPACES, logger)
+    const sink = new ObjectStorageSink(STORAGE, logger)
     const res = await sink.putRecording('rec-9', mp3, undefined, {} as RecordingMeta)
 
     expect(res.mp3Location).toBe('recordings/rec-9/rec-9.mp3')
@@ -128,7 +128,7 @@ describe('SpacesSink', () => {
     await writeFile(mp3, 'mp3')
     await writeFile(vtt, 'WEBVTT')
 
-    const sink = new SpacesSink(SPACES, logger)
+    const sink = new ObjectStorageSink(STORAGE, logger)
     const res = await sink.putRecording('rec-vtt', mp3, vtt, {} as RecordingMeta)
 
     expect(res.vttLocation).toBe('recordings/rec-vtt/rec-vtt.vtt')

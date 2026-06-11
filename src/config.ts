@@ -84,7 +84,7 @@ export interface StandaloneConfig {
 
 /**
  * CFG-hosted configuration — present only when core-server spawned this
- * container. Drives billing ticks, Spaces upload, consent sync, and the
+ * container. Drives billing ticks, object-storage upload, consent sync, and the
  * JWT-authenticated control API. Every field here is injected by
  * core-server's container spawner.
  */
@@ -113,12 +113,16 @@ export interface CfgHostedConfig {
    * uptime tick). Absent ⇒ BYOK or transcription disabled ⇒ no surcharge.
    */
   transcriptionCtPerMinute?: number
-  /** DO Spaces credentials — when present the container uploads finalized mp3/VTT. */
-  spaces?: SpacesConfig
+  /** Object-storage credentials — when present the container uploads finalized mp3/VTT. */
+  objectStorage?: ObjectStorageConfig
 }
 
-/** DO Spaces (S3-compatible) credentials for the CFG-hosted upload sink. */
-export interface SpacesConfig {
+/**
+ * S3-compatible object-storage credentials for the CFG-hosted upload sink.
+ * Resolved from the `DO_SPACES_*` env vars (names kept for deployed-surface
+ * compatibility; any S3-compatible endpoint works).
+ */
+export interface ObjectStorageConfig {
   key: string
   secret: string
   bucket: string
@@ -135,9 +139,9 @@ export interface SpacesConfig {
  * required — a half-configured phone-home is a misconfiguration we want to
  * fail loudly at boot rather than silently degrade.
  *
- * DO Spaces is independently optional: with `CORE_SERVER_URL` but no
- * `DO_SPACES_*`, the container phones home for billing/consent but still
- * stores recordings locally (the LocalDirSink path).
+ * Object-storage upload is independently optional: with `CORE_SERVER_URL`
+ * but no `DO_SPACES_*`, the container phones home for billing/consent but
+ * still stores recordings locally (the LocalDirSink path).
  */
 export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
   const coreServerUrl = process.env.CORE_SERVER_URL
@@ -161,11 +165,11 @@ export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
     }
   }
 
-  let spaces: SpacesConfig | undefined
-  const spacesKey = process.env.DO_SPACES_KEY
-  if (spacesKey) {
-    spaces = {
-      key: spacesKey,
+  let objectStorage: ObjectStorageConfig | undefined
+  const storageKey = process.env.DO_SPACES_KEY
+  if (storageKey) {
+    objectStorage = {
+      key: storageKey,
       secret: requireEnv('DO_SPACES_SECRET'),
       bucket: requireEnv('DO_SPACES_BUCKET'),
       region: requireEnv('DO_SPACES_REGION'),
@@ -181,7 +185,7 @@ export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
     ctPerMinute,
     size: optionalEnv('DISRECORD_SIZE', 'small'),
     transcriptionCtPerMinute,
-    spaces,
+    objectStorage,
   }
 }
 

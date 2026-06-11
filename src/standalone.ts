@@ -11,9 +11,9 @@
  * One image, two modes — picked by whether `config.cfg` is set:
  *   Self-host  — no `CORE_SERVER_URL`. LocalDirSink, 127.0.0.1 control bind,
  *                static `CONTROL_TOKEN` auth, no phone-home.
- *   CFG-hosted — `CORE_SERVER_URL` present. SpacesSink (when `DO_SPACES_*`
- *                set), 0.0.0.0 control bind, per-session-JWT auth, billing /
- *                consent / transcript phone-home.
+ *   CFG-hosted — `CORE_SERVER_URL` present. ObjectStorageSink (when
+ *                `DO_SPACES_*` set), 0.0.0.0 control bind, per-session-JWT
+ *                auth, billing / consent / transcript phone-home.
  *
  * Boots, in order:
  *   1. Discord gateway  — logs in with the borrowed bot token, waits for
@@ -27,7 +27,7 @@ import { logger as rootLogger } from './logger.js'
 import { resolveStandaloneConfig, type StandaloneConfig } from './config.js'
 import { startGateway, stopGateway } from './gateway/discord-gateway.js'
 import { RecordingService } from './recording/recording-service.js'
-import { LocalDirSink, SpacesSink, type OutputSink } from './recording/output-sink.js'
+import { LocalDirSink, ObjectStorageSink, type OutputSink } from './recording/output-sink.js'
 import { startControlServer } from './control/server.js'
 import { createControlAuthenticator } from './control/auth.js'
 
@@ -41,7 +41,7 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
       controlPort: config.controlPort,
       deepgramMode: config.deepgramMode,
       mode: cfgHosted ? 'cfg-hosted' : 'self-host',
-      spacesUpload: config.cfg?.spaces != null,
+      objectStorageUpload: config.cfg?.objectStorage != null,
     },
     'starting cfg-server-disrecord in serve mode',
   )
@@ -52,9 +52,9 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
   const client = await startGateway(config.discordToken, rootLogger.child({ module: 'gateway' }))
 
   // ── 2. RecordingService — sink picked by mode.
-  // CFG-hosted with DO Spaces creds ⇒ upload to Spaces; otherwise local dir.
-  const sink: OutputSink = config.cfg?.spaces
-    ? new SpacesSink(config.cfg.spaces, rootLogger.child({ module: 'spaces-sink' }))
+  // CFG-hosted with object-storage creds ⇒ upload; otherwise local dir.
+  const sink: OutputSink = config.cfg?.objectStorage
+    ? new ObjectStorageSink(config.cfg.objectStorage, rootLogger.child({ module: 'object-storage-sink' }))
     : new LocalDirSink(config.outputDir, rootLogger.child({ module: 'output-sink' }))
   const service = new RecordingService(client, sink, config, rootLogger)
 

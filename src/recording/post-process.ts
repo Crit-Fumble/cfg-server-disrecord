@@ -4,9 +4,9 @@
  * is on), and hands the result to a pluggable {@link OutputSink}.
  *
  * Ported from cfg-core-server's `services/recording/post-processor.ts`,
- * stripped of Prisma + the hardcoded DO Spaces upload — the storage step is
- * now a sink call so the standalone container can store locally (Phase 1)
- * and the CFG-hosted path can upload to Spaces (Phase 2).
+ * stripped of Prisma + the hardcoded object-storage upload — the storage step
+ * is now a sink call so the standalone container can store locally (Phase 1)
+ * and the CFG-hosted path can upload to object storage (Phase 2).
  */
 
 import { stat, writeFile, rename } from 'node:fs/promises'
