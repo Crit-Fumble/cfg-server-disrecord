@@ -36,7 +36,7 @@
     "libsodium-wrappers": "^0.7.15",
     "pino": "^10.1.0",
     "tweetnacl": "^1.0.3",
-    "ws": "^8.19.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "@swc/core": "^1.15.33",
