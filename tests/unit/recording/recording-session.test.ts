@@ -4,7 +4,8 @@
  * Covers:
  *   - Consent gate: redacted speakers get a single placeholder per turn,
  *     never an open Deepgram stream
- *   - Globalized timestamps: per-speaker stream-open offset is applied
+ *   - Globalized timestamps: finals are anchored to wall clock, not Deepgram's
+ *     silence-suppressed per-stream clock (so captions align to the mp3)
  *   - Mid-session consent flip (decline + re-consent)
  *   - Stream lifecycle: streams created on first start, kept open across
  *     silence (cfg-core-server#63), closed only on stop()
@@ -206,6 +207,37 @@ describe('RecordingSession — transcript emission', () => {
     expect(event.speakerName).toBe('User-u5')
     expect(event.isRedacted).toBe(false)
     expect(event.words).toHaveLength(2)
+  })
+
+  it('anchors finalized timestamps to wall clock, not the Deepgram per-stream clock', async () => {
+    jest.useFakeTimers()
+    try {
+      jest.setSystemTime(1_000_000)
+      const onFinal = jest.fn()
+      const sess = new RecordingSession(defaultParams({ onTranscriptFinal: onFinal }))
+      await sess.onSpeakerStart('u8') // session origin anchored at now
+      jest.setSystemTime(1_000_000 + 50_000) // 50s of wall clock elapses (mostly silence)
+      const fakeStream = fakeStreamRegistry[0]
+      // Deepgram word offsets are tiny (0.2..1.1s) because the socket is
+      // silence-suppressed — the OLD code placed this utterance at ~0.2s.
+      fakeStream.emit('transcript', {
+        transcript: 'late utterance',
+        isFinal: true,
+        speechFinal: true,
+        words: [
+          { word: 'late', start: 0.2, end: 0.6, confidence: 0.9 },
+          { word: 'utterance', start: 0.7, end: 1.1, confidence: 0.9 },
+        ],
+      })
+      expect(onFinal).toHaveBeenCalledTimes(1)
+      const ev = onFinal.mock.calls[0][0] as TranscriptFinalEvent
+      // Anchored to wall clock: ends ~50s in, starts one utterance-length (0.9s)
+      // earlier — NOT ~0.2s. This is what keeps captions aligned to the mp3.
+      expect(ev.endSec).toBeCloseTo(50, 1)
+      expect(ev.startSec).toBeCloseTo(49.1, 1)
+    } finally {
+      jest.useRealTimers()
+    }
   })
 
   it('skips empty / non-final transcripts', async () => {

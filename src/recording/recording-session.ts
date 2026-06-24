@@ -129,7 +129,6 @@ export class RecordingSession {
 
   private readonly speakerStreams = new Map<string, DeepgramStreamingClient>()
   private readonly speakerNames = new Map<string, string>()
-  private readonly streamOpenedAtMs = new Map<string, number>()
 
   /**
    * Speakers whose current turn is being redacted (not transcribed). Set on
@@ -284,7 +283,6 @@ export class RecordingSession {
 
     this.speakerStreams.set(userId, deepgramStream)
     this.getSessionStartedAtMs()
-    this.streamOpenedAtMs.set(userId, Date.now())
 
     if (!this.speakerNames.has(userId)) {
       this.speakerNames.set(userId, await this.resolveSpeakerName(userId))
@@ -316,17 +314,22 @@ export class RecordingSession {
         return
       }
 
-      // Globalize per-speaker timestamps once, so all consumers see the
-      // same time origin. Deepgram words[i].start is relative to per-
-      // speaker stream open; we offset by (streamOpened - sessionStart).
-      const streamOpenedAtMs = this.streamOpenedAtMs.get(userId) ?? Date.now()
-      const speakerOffsetSec = (streamOpenedAtMs - this.getSessionStartedAtMs()) / 1000
-      const globalStartSec =
-        ev.words.length > 0 ? speakerOffsetSec + ev.words[0].start : speakerOffsetSec
-      const endSec =
-        ev.words.length > 0
-          ? speakerOffsetSec + ev.words[ev.words.length - 1].end
-          : (Date.now() - this.getSessionStartedAtMs()) / 1000
+      // Anchor each final to WALL CLOCK at arrival — NOT Deepgram's per-stream
+      // word offsets. Those offsets count only audio STREAMED on the socket,
+      // which is silence-suppressed: we hold the WS open with keepalives and
+      // send only speech frames, so the Deepgram clock drifts ever further
+      // behind real time as silence accumulates. The mixed mp3, by contrast, is
+      // silence-PADDED to wall clock — so using the Deepgram clock for global
+      // placement piles captions into the early audio and starves the tail
+      // (prod 2026-06-23: a 91-min session capped captions at ~42 min and
+      // produced no VTT for the final mp3 parts). The final lands shortly after
+      // the speech, so `now` ≈ utterance end; subtract the utterance's own
+      // length for its start. Matches the wall-clock basis the redacted path
+      // (onSpeakerStart / onSpeakerEnd) already uses.
+      const nowSec = (Date.now() - this.getSessionStartedAtMs()) / 1000
+      const utteranceDurationSec =
+        ev.words.length > 0 ? Math.max(0, ev.words[ev.words.length - 1].end - ev.words[0].start) : 0
+      const globalStartSec = Math.max(0, nowSec - utteranceDurationSec)
 
       void this.emit({
         speakerId: userId,
@@ -334,7 +337,7 @@ export class RecordingSession {
         transcript: ev.transcript,
         isRedacted: false,
         startSec: globalStartSec,
-        endSec: Math.max(endSec, globalStartSec + 0.1),
+        endSec: Math.max(nowSec, globalStartSec + 0.1),
         words: ev.words,
       })
     })
