@@ -20,6 +20,7 @@ import { join } from 'node:path'
 import { ActivityType, type Client } from 'discord.js'
 import { VoiceCapture } from '../gateway/voice-capture.js'
 import { PcmCapture } from './pcm-capture.js'
+import { ActiveTimeMeter } from './active-time-meter.js'
 import { RecordingSession, type TranscriptFinalEvent, type TranscriptInterimEvent } from './recording-session.js'
 import { buildDeepgramTokenProvider } from '../deepgram/index.js'
 import { ConsentManager } from '../consent/consent-manager.js'
@@ -127,8 +128,13 @@ export class SessionController {
   private consentSync: ConsentSync | null = null
   /** Billing-tick timer — only armed when `cfg` is present. */
   private billingTimer: NodeJS.Timeout | null = null
-  /** Epoch ms of the last billing tick — slides forward across paused windows. */
-  private lastBillingTickAt = 0
+  /**
+   * Tracks ACTIVE (un-paused) time for the billing tick. Replaces the old
+   * single sliding anchor, which discarded the active sub-window whenever a
+   * tick boundary landed during a pause (prod incident 2026-06-23: a session
+   * paused at ~10 min billed only the post-tick sliver, ~1 of ~10 active min).
+   */
+  private readonly billingMeter = new ActiveTimeMeter()
   /**
    * Whether this session incurs the separate `transcription` surcharge tick.
    * True only when CFG-hosted with `transcriptionCtPerMinute` set (platform
@@ -378,6 +384,7 @@ export class SessionController {
   pause(): void {
     if (this.status !== 'recording') return
     this.status = 'paused'
+    this.billingMeter.pause(Date.now())
     this.pcmCapture.setPaused(true)
     this.session.setPaused(true)
     this.logger.info({ recordingId: this.recordingId }, 'recording paused')
@@ -386,6 +393,7 @@ export class SessionController {
   resume(): void {
     if (this.status !== 'paused') return
     this.status = 'recording'
+    this.billingMeter.resume(Date.now())
     this.pcmCapture.setPaused(false)
     this.session.setPaused(false)
     this.logger.info({ recordingId: this.recordingId }, 'recording resumed')
@@ -400,9 +408,11 @@ export class SessionController {
   }
 
   /**
-   * Arm the periodic CT billing tick. Pause-aware: while the session is
-   * paused we slide `lastBillingTickAt` forward so the user isn't billed
-   * for the paused window (ported from the legacy `worker.ts` cadence).
+   * Arm the periodic CT billing tick. Pause-aware via `billingMeter`, which
+   * banks only ACTIVE (un-paused) time: a tick that lands during a pause bills
+   * exactly the active window that preceded the pause (possibly a full
+   * interval), and a tick during recording bills active-up-to-now. Paused time
+   * is never billed and active time is never discarded.
    *
    * Two ticks ride the SAME cadence: the `server_uptime` tick (always, when
    * CFG-hosted — the skill-server container's by-instance-size uptime) and
@@ -412,16 +422,10 @@ export class SessionController {
   private startBillingTimer(): void {
     const cfg = this.params.cfg
     if (!cfg) return
-    this.lastBillingTickAt = Date.now()
+    this.billingMeter.start(Date.now())
     const timer = setInterval(() => {
-      if (this.status === 'paused') {
-        this.lastBillingTickAt = Date.now()
-        return
-      }
-      const now = Date.now()
-      const minutes = (now - this.lastBillingTickAt) / 60_000
-      this.lastBillingTickAt = now
-      this.postBillingTicks(minutes, false)
+      const minutes = this.billingMeter.flushMinutes(Date.now())
+      if (minutes > 0) this.postBillingTicks(minutes, false)
     }, BILLING_TICK_MINUTES * 60_000)
     timer.unref()
     this.billingTimer = timer
@@ -435,7 +439,7 @@ export class SessionController {
       this.billingTimer = null
     }
     if (!cfg) return
-    const finalMinutes = (Date.now() - this.lastBillingTickAt) / 60_000
+    const finalMinutes = this.billingMeter.flushMinutes(Date.now())
     if (finalMinutes > 0) await this.postBillingTicks(finalMinutes, true)
   }
 
