@@ -8,7 +8,7 @@
  * `disrecord/index.ts` role for a single session.
  *
  * Lifecycle:
- *   start()  → mkdir temp → join voice → post initial consent prompt
+ *   start()  → mkdir temp → join voice (capture ASAP) → create thread + wire consent surface
  *   pause()  → gate audio + transcription
  *   resume() → un-gate
  *   stop()   → leave voice → finalize PCM → mix → VTT → sink → post thread
@@ -294,19 +294,61 @@ export class SessionController {
       consent: this.consent,
       logger: this.logger,
     })
-    await this.voice.join()
 
     // Look up voice members up front — used for thread invites, the
-    // announcement ping list, and the consent-prompt loop below.
+    // announcement ping list, and the member-seeding below. Cheap
+    // (`channels.fetch` only) and needs no live voice connection, so it runs
+    // before the join.
     const memberIds = await this.voiceMemberIds(p.client)
+
+    // ── Capture starts ASAP: voice.join() runs EARLY ────────────────────────
+    // `join()` is the ONLY thing that establishes the VoiceConnection + audio
+    // receiver, and @discordjs/voice has no pre-buffer. Delaying it behind the
+    // ~4 awaited Discord REST round-trips of thread creation would permanently
+    // drop the opening audio — including the auto-consented host/invoker's
+    // session-start narration (they pass the consent gate immediately, so
+    // their early audio WOULD be captured if a connection existed). So we join
+    // first and reconcile the thread-creation race a different way:
+    //
+    //   1. Seed members-at-start as `seen`/`pending` so `noteSpeaker` (fired by
+    //      the speaking/voiceStateUpdate listeners join() registers) is a no-op
+    //      for them — no per-member prompt; their surface is the 3-button row
+    //      on the announcement below. This is local (no Discord calls), so it
+    //      runs BEFORE join() to fully pre-empt the double-prompt path.
+    //   2. Tell the consent manager a thread IS coming (`expectThread`). Any
+    //      consent prompt that fires in the join→setThreadId window is then
+    //      QUEUED (not leaked to the parent channel) and flushed into the
+    //      thread once `setThreadId` resolves below.
+    await this.consent.promptInitial(memberIds)
+    this.consent.expectThread()
+    // If the join fails, no thread or announcement exists yet (we join BEFORE
+    // creating them), so there's no orphaned thread + "click to consent"
+    // surface for a recording that never starts. We DO still need to detach
+    // the consent manager's interactionCreate listener — the controller is
+    // never committed to the registry on a start() throw, so runStop() (which
+    // calls consent.stop()) never runs. Mark failed + tear down, then rethrow
+    // so recording-service releases the registry slot.
+    try {
+      await this.voice.join()
+    } catch (err) {
+      this.status = 'failed'
+      this.consent.stop()
+      await rm(this.tempDir, { recursive: true, force: true }).catch(() => {})
+      this.logger.error(
+        { err, recordingId: this.recordingId, guildId: this.guildId },
+        'voice.join() failed — aborting start before any thread/announcement was created',
+      )
+      throw err
+    }
 
     // Create the live thread NOW (private — only the invoker + current
     // voice members get added, so the recording artifact + transcripts
     // are visible only to people who were in the call). When
     // transcription is on, captions stream into it; on stop the mp3 is
     // attached to this same thread instead of creating a new one.
-    // Best-effort — `createRecordingThread` returns null on failure and
-    // `deliver` falls back to posting in the parent channel.
+    // Best-effort — `createRecordingThread` returns null on failure; the
+    // consent manager then flushes any queued prompts to the parent channel
+    // (genuine no-thread fallback) and `deliver` refuses to post the mp3.
     const voiceChannelName = await this.voiceChannelName(p.client)
     const threadMembers = Array.from(new Set([p.invokerUserId, ...memberIds].filter((id): id is string => !!id)))
     this.threadId = await createRecordingThread(
@@ -317,10 +359,29 @@ export class SessionController {
       threadMembers,
       this.logger,
     )
-    // Hand the thread id to the consent manager so subsequent prompts
-    // (initial + late-joiner) target the thread, adding the user to it
-    // on demand. Falls back to the parent channel on any thread error.
+    // Wire the thread id into the consent manager. This ALSO flushes any
+    // prompts that the voice listeners queued during the join→now window:
+    // into the thread when non-null, or to the parent channel when thread
+    // creation failed (null) — the genuine no-thread fallback.
     this.consent.setThreadId(this.threadId)
+
+    // Post the session-start announcement INSIDE the (private) thread —
+    // pings the invoker (if any) + every voice member so they all get a
+    // Discord notification pointing at the thread, AND carries the 3-button
+    // consent row that is the consent surface for everyone-in-voice-at-start.
+    // Posted unconditionally whenever a thread exists — NOT gated on
+    // `invokerUserId` (issue #5: auto-started sessions have no invoker, so the
+    // old `if (p.invokerUserId)` gate meant non-speakers were never prompted
+    // and `firstThreadMessageId` — the Back-to-Top anchor — was never set).
+    // The returned message id anchors the end-of-session Back-to-Top link.
+    if (this.threadId) {
+      this.firstThreadMessageId = await this.consent.postSessionStart(
+        p.invokerUserId ?? null,
+        this.threadId,
+        p.transcription,
+        memberIds,
+      )
+    }
 
     // Spin up the per-speaker webhook manager. Each speaker's live caption
     // posts via their own webhook (their name + avatar) so Discord groups
@@ -331,31 +392,9 @@ export class SessionController {
     // init() sweeps any stale `cfg-resesh-rec-*` webhooks left in the
     // parent channel by crashed prior sessions, freeing slots back to
     // Discord's 15-webhook cap before this session starts creating its
-    // own. Fired in parallel with the consent-prompt loop below — neither
-    // depends on the other, and we don't want to block the join on a
-    // slow Discord API call.
+    // own. Fired-and-forgotten — it doesn't depend on the voice connection.
     this.webhookManager = new SpeakerWebhookManager(p.client, p.textChannelId, this.recordingId, this.logger)
     void this.webhookManager.init()
-
-    // Post the session-start announcement INSIDE the (private) thread —
-    // pings the invoker + every voice member so they all get a Discord
-    // notification pointing at the thread. The invoker is auto-consented
-    // (pre-seeded via `initialConsented` above), so this message carries
-    // no consent buttons; per-member consent prompts go out below for
-    // everyone else in voice.
-    if (p.invokerUserId) {
-      this.firstThreadMessageId = await this.consent.postSessionStart(
-        p.invokerUserId,
-        this.threadId,
-        p.transcription,
-        memberIds,
-      )
-    }
-
-    // Prompt everyone currently in the voice channel. The invoker is already
-    // in `initialConsented` so they're skipped — only OTHER members see a
-    // consent prompt.
-    await this.consent.promptInitial(memberIds)
 
     this.status = 'recording'
 

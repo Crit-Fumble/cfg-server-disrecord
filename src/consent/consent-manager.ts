@@ -70,11 +70,30 @@ export class ConsentManager {
   private threadId: string | null
   private readonly logger: Logger
 
+  /**
+   * True once the controller has told us a recording thread WILL be created
+   * (via {@link expectThread}) but `threadId` isn't wired in yet — the
+   * thread-creation window. A consent prompt that fires in this window is
+   * QUEUED ({@link pendingThreadPrompts}) rather than posted to the parent
+   * channel, then flushed into the thread by {@link setThreadId}. Distinguishes
+   * "the thread is coming, just not set yet" (queue) from "this session has
+   * genuinely no thread" (parent-channel fallback). Cleared once the thread is
+   * set, or when thread creation is reported as failed (`setThreadId(null)`).
+   */
+  private threadExpected = false
+
   private readonly consented = new Set<string>()
   private readonly declined = new Set<string>()
   private readonly pending = new Set<string>()
   /** Speakers we've already seen — gates duplicate late-joiner prompts. */
   private readonly seen = new Set<string>()
+  /**
+   * User ids whose consent prompt fired during the thread-creation window
+   * (thread expected, not yet set). Flushed INTO the thread by
+   * {@link setThreadId} so an early speaker's prompt never leaks to the
+   * parent channel. Order-preserving + deduped (re-queue is a no-op).
+   */
+  private readonly pendingThreadPrompts = new Set<string>()
 
   private readonly consentListeners: ConsentListener[] = []
   private readonly declineListeners: ConsentListener[] = []
@@ -144,6 +163,46 @@ export class ConsentManager {
   }
 
   /**
+   * Tell the manager a recording thread IS being created but isn't wired in
+   * yet. Call this BEFORE the voice listeners go live (which can trigger a
+   * consent prompt) and BEFORE {@link setThreadId} resolves. While this is
+   * set and `threadId` is still null, a consent prompt is QUEUED for the
+   * thread instead of leaking to the parent channel; {@link setThreadId}
+   * flushes the queue. Without this flag a null-thread prompt falls back to
+   * the parent channel as before (the genuine no-thread case).
+   */
+  expectThread(): void {
+    this.threadExpected = true
+  }
+
+  /**
+   * Late-binding setter for the recording thread. The thread is created
+   * AFTER the manager constructor runs (the controller needs the manager
+   * first so it can build the recording session), so the thread id is
+   * wired in once thread creation resolves. All subsequent prompts +
+   * announcements target the thread when it's set.
+   *
+   * Resolves the thread-creation window opened by {@link expectThread}:
+   *   - non-null id  → wire the thread + flush any queued prompts INTO it.
+   *   - null id      → thread creation failed; the window is over, so flush
+   *                    any queued prompts to the PARENT channel (the genuine
+   *                    no-thread fallback) and clear the expectation.
+   */
+  setThreadId(threadId: string | null): void {
+    this.threadId = threadId
+    this.threadExpected = false
+    const queued = Array.from(this.pendingThreadPrompts)
+    this.pendingThreadPrompts.clear()
+    // Re-issue each queued prompt now that the thread destination is known.
+    // With a thread it posts in-thread; without one (creation failed) it
+    // takes the parent-channel fallback — the same path a no-thread session
+    // always took. `requestConsent` is idempotent at the gate via `seen`,
+    // but these ids were only ADDED to `pending` (never sent), so re-issuing
+    // is the first real send.
+    for (const userId of queued) void this.requestConsent(userId)
+  }
+
+  /**
    * Post the session-start announcement INSIDE the recording thread (when
    * one was created). Discord drops its own "[bot] started a thread: ..."
    * system message in the parent channel automatically; the explicit
@@ -153,39 +212,39 @@ export class ConsentManager {
    * session's surface.
    *
    * When thread creation failed earlier (`threadId === null`), fall back
-   * to the parent channel so the invoker still sees the ping.
+   * to the parent channel so members still see the ping.
    *
-   * Carries NO consent buttons — the invoker is auto-consented, and other
-   * members get their own per-member prompts via {@link promptInitial} /
-   * {@link noteSpeaker}. Best-effort: a failure is logged but doesn't
-   * abort the session.
+   * CARRIES the 3-button consent row — this is the consent surface for
+   * everyone in voice at start (issue #5). The invoker (when present) is
+   * auto-consented but still gets a revoke button; everyone else opts in
+   * here. Late joiners who weren't in voice at start get their own prompt
+   * via {@link noteSpeaker}. Posted regardless of whether an invoker exists
+   * (auto-started sessions have none). Returns the new message id — the
+   * controller anchors the end-of-session "Back to Top" link on it.
+   * Best-effort: a failure is logged, returns null, and doesn't abort the
+   * session.
    */
-  /**
-   * Late-binding setter for the recording thread. The thread is created
-   * AFTER the manager constructor runs (the controller needs the manager
-   * first so it can build the recording session), so the thread id is
-   * wired in once thread creation resolves. All subsequent prompts +
-   * announcements target the thread when it's set.
-   */
-  setThreadId(threadId: string | null): void {
-    this.threadId = threadId
-  }
-
   async postSessionStart(
-    invokerUserId: string,
+    invokerUserId: string | null,
     threadId: string | null,
     transcription: boolean,
     memberIds: string[] = [],
   ): Promise<string | null> {
     const kindLabel = transcription ? 'session recording with live transcription' : 'session recording'
     // Mention everyone who was in voice at start so they get a Discord
-    // notification pointing them at the private thread. The invoker leads
-    // the mention list; voice members follow in deduplicated order.
+    // notification pointing them at the private thread. The invoker (when
+    // there is one — auto-started sessions have none) leads the mention
+    // list; voice members follow in deduplicated order. With no invoker we
+    // fall back to the voice members alone so non-speakers still get pinged
+    // and the buttons-bearing announcement still posts (issue #5).
     const mentionIds = Array.from(
-      new Set([invokerUserId, ...memberIds].filter((id) => typeof id === 'string' && id.length > 0)),
+      new Set([invokerUserId, ...memberIds].filter((id): id is string => typeof id === 'string' && id.length > 0)),
     )
     const mentions = mentionIds.map((id) => `<@${id}>`).join(' ')
-    const leadMention = mentions || `<@${invokerUserId}>`
+    // With mentions: "<@u1> <@u2> — starting a session recording." With
+    // none (an auto-started session whose voice channel we couldn't read):
+    // "Starting a session recording." — no dangling mention, still posts.
+    const lead = mentions ? `${mentions} — s` : 'S'
     // Embed the 3-button consent row directly on the ping so everyone
     // sees the opt-in/opt-out controls without a separate per-member
     // prompt. This replaces the old promptInitial fan-out — that path
@@ -194,7 +253,7 @@ export class ConsentManager {
     // the session-policy documentation. Late joiners who weren't in
     // voice at start still get their own prompt via noteSpeaker().
     const content =
-      `${leadMention} starting a ${kindLabel}.\n\n` +
+      `${lead}tarting a ${kindLabel}.\n\n` +
       '🔁 **Yes, and remember** — voice is captured for this session AND future sessions in this channel.\n' +
       '✅ **Yes, this time only** — voice is captured for this session only.\n' +
       "❌ **Skip my voice** — voice isn't captured; the session continues. Click again anytime to revoke."
@@ -274,6 +333,16 @@ export class ConsentManager {
   }
 
   private async requestConsent(userId: string): Promise<void> {
+    // Thread-creation window: a thread WILL exist but isn't wired in yet.
+    // Queue this prompt instead of leaking it to the parent channel — it's
+    // flushed into the thread (or the parent, if creation failed) once
+    // setThreadId resolves. `pending` already holds the user (set by the
+    // caller), so audio stays gated as redacted until they decide.
+    if (!this.threadId && this.threadExpected) {
+      this.pendingThreadPrompts.add(userId)
+      return
+    }
+
     const content =
       `<@${userId}> 🎙 A session recording is in progress.\n\n` +
       '🔁 **Yes, and remember** — your voice is in the recording, transcript, and captions, AND skip ' +
