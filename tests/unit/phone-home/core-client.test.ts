@@ -51,9 +51,12 @@ describe('CoreServerClient — self-host (no CFG config)', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
-  it('postBillingTick is a no-op and never calls fetch', async () => {
+  it('postBillingTick is a no-op (insufficientCoins:false), never calls fetch', async () => {
     const client = new CoreServerClient(undefined, logger)
-    await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, ctPerMinute: 13, label: 'x' })
+    const result = await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, ctPerMinute: 13, label: 'x' })
+    // Self-host never bills, so it never reports insufficient coins — a
+    // self-host session must never be torn down by the billing path (#120).
+    expect(result).toEqual({ insufficientCoins: false })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
@@ -97,7 +100,7 @@ describe('CoreServerClient — CFG-hosted', () => {
   it('postBillingTick POSTs the installationId + payload', async () => {
     fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 200 }))
     const client = new CoreServerClient(HOSTED, logger)
-    await client.postBillingTick({ resourceType: 'server_uptime', minutes: 2.5, ctPerMinute: 13, label: 'x' })
+    const result = await client.postBillingTick({ resourceType: 'server_uptime', minutes: 2.5, ctPerMinute: 13, label: 'x' })
     const [url, opts] = fetchSpy.mock.calls[0]
     expect(String(url)).toBe('http://core:3001/api/v1/billing/uptime-tick')
     expect(JSON.parse((opts as RequestInit).body as string)).toMatchObject({
@@ -105,6 +108,8 @@ describe('CoreServerClient — CFG-hosted', () => {
       minutes: 2.5,
       resourceType: 'server_uptime',
     })
+    // 2xx ⇒ not insufficient (the recording keeps running).
+    expect(result).toEqual({ insufficientCoins: false })
   })
 
   it('fetchDeepgramToken POSTs to the deepgram-token route and returns the grant', async () => {
@@ -130,6 +135,45 @@ describe('CoreServerClient — CFG-hosted', () => {
     fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'))
     const client = new CoreServerClient(HOSTED, logger)
     expect(await client.fetchDeepgramToken()).toBeNull()
+  })
+
+  // ── #120: insufficient-Crit-Coin 402 is the ONLY stop signal ──────────────
+  it('postBillingTick returns insufficientCoins:true on a 402 (the mid-session stop signal)', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'insufficient_coins', need: 5, have: 2, ctNeeded: 12 }), { status: 402 }),
+    )
+    const client = new CoreServerClient(HOSTED, logger)
+    const result = await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, ctPerMinute: 13, label: 'x' })
+    expect(result).toEqual({ insufficientCoins: true })
+  })
+
+  it('postBillingTick treats a 402 with a MISSING/garbage body as insufficient (status is authoritative)', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not-json', { status: 402 }))
+    const client = new CoreServerClient(HOSTED, logger)
+    const result = await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, ctPerMinute: 13, label: 'x' })
+    expect(result).toEqual({ insufficientCoins: true })
+  })
+
+  it('postBillingTick does NOT stop on a 500 (transient failure is a best-effort no-op)', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 500 }))
+    const client = new CoreServerClient(HOSTED, logger)
+    const result = await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, ctPerMinute: 13, label: 'x' })
+    // CRITICAL: a flaky meter must not tear down an in-progress recording.
+    expect(result).toEqual({ insufficientCoins: false })
+  })
+
+  it('postBillingTick does NOT stop on a 503 (transient failure is a best-effort no-op)', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 503 }))
+    const client = new CoreServerClient(HOSTED, logger)
+    const result = await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, ctPerMinute: 13, label: 'x' })
+    expect(result).toEqual({ insufficientCoins: false })
+  })
+
+  it('postBillingTick does NOT stop on a thrown/network error (best-effort no-op)', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'))
+    const client = new CoreServerClient(HOSTED, logger)
+    const result = await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, ctPerMinute: 13, label: 'x' })
+    expect(result).toEqual({ insufficientCoins: false })
   })
 
   it('postTranscript swallows a non-2xx response', async () => {

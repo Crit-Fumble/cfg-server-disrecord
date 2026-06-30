@@ -129,6 +129,14 @@ export class SessionController {
   /** Billing-tick timer — only armed when `cfg` is present. */
   private billingTimer: NodeJS.Timeout | null = null
   /**
+   * Once-flag for the mid-session insufficient-Crit-Coin graceful stop (#120).
+   * Set the first time a `server_uptime` tick comes back 402; guards
+   * {@link handleInsufficientCoins} so the user gets exactly ONE
+   * "out of Crit-Coin" channel message and exactly ONE stop(), even though
+   * stop() itself posts a final billing tick that would also 402.
+   */
+  private insufficientStopFired = false
+  /**
    * Tracks ACTIVE (un-paused) time for the billing tick. Replaces the old
    * single sliding anchor, which discarded the active sub-window whenever a
    * tick boundary landed during a pause (prod incident 2026-06-23: a session
@@ -464,7 +472,9 @@ export class SessionController {
     this.billingMeter.start(Date.now())
     const timer = setInterval(() => {
       const minutes = this.billingMeter.flushMinutes(Date.now())
-      if (minutes > 0) this.postBillingTicks(minutes, false)
+      // postBillingTicks is async (it awaits the server_uptime tick to detect
+      // a 402 → graceful stop, #120); fire-and-forget from the timer callback.
+      if (minutes > 0) void this.postBillingTicks(minutes, false)
     }, BILLING_TICK_MINUTES * 60_000)
     timer.unref()
     this.billingTimer = timer
@@ -488,23 +498,24 @@ export class SessionController {
    * billed by instance size); additionally posts a separate itemized
    * `transcription` surcharge tick when this session runs on the platform
    * Deepgram key (`transcriptionBilled`).
+   *
+   * The `server_uptime` tick is AWAITED so a mid-session insufficient-Crit-Coin
+   * 402 triggers a graceful stop (#120). The `transcription` surcharge tick is
+   * intentionally NOT awaited and NEVER drives the stop: only the unified
+   * server-uptime axis is the dunning signal (a transcription-only shortfall
+   * still produced a recording the user can keep).
    */
-  private postBillingTicks(minutes: number, final: boolean): void {
+  private async postBillingTicks(minutes: number, final: boolean): Promise<void> {
     const cfg = this.params.cfg
     if (!cfg) return
     const suffix = final ? `final ${minutes.toFixed(1)} min` : `${minutes.toFixed(1)} min`
-    void this.params.core.postBillingTick({
-      resourceType: 'server_uptime',
-      minutes,
-      ctPerMinute: cfg.ctPerMinute,
-      label: `Recording Server (${cfg.size}): ${suffix}`,
-    })
     // Transcription tick is gated on both INTENT (transcriptionBilled, set at
     // start from `effectiveMode === 'platform'`) AND DELIVERY
     // (transcriptionDelivered, flipped the first time a transcript event
     // arrives). If the platform grant fails or Deepgram is otherwise broken,
     // no transcripts flow, transcriptionDelivered stays false, and the
     // surcharge is never posted — the user only pays server_uptime.
+    // Fire-and-forget: a transcription 402 must NOT stop the recording.
     if (this.transcriptionBilled && this.transcriptionDelivered && cfg.transcriptionCtPerMinute != null) {
       void this.params.core.postBillingTick({
         resourceType: 'transcription',
@@ -513,6 +524,35 @@ export class SessionController {
         label: `Live Transcription: ${suffix}`,
       })
     }
+    // Server-uptime tick: AWAITED, and it is the ONLY tick whose 402 stops the
+    // recording. A 402 here means the user is out of Crit-Coin → graceful stop.
+    const { insufficientCoins } = await this.params.core.postBillingTick({
+      resourceType: 'server_uptime',
+      minutes,
+      ctPerMinute: cfg.ctPerMinute,
+      label: `Recording Server (${cfg.size}): ${suffix}`,
+    })
+    if (insufficientCoins) await this.handleInsufficientCoins()
+  }
+
+  /**
+   * Mid-session insufficient-Crit-Coin graceful stop (#120). Fired when a
+   * `server_uptime` billing tick comes back 402. Guarded by a once-flag so the
+   * user gets exactly one "out of Crit-Coin" channel message and exactly one
+   * stop() — the in-flight stop posts a final tick that would also 402, and
+   * this guard prevents that from re-posting or re-entering.
+   */
+  private async handleInsufficientCoins(): Promise<void> {
+    if (this.insufficientStopFired) return
+    this.insufficientStopFired = true
+    this.logger.warn({ recordingId: this.recordingId }, 'out of Crit-Coin — stopping recording (#120)')
+    // Best-effort user-facing notice in the thread (null-safe on threadId).
+    await this.postBotMessage('Out of Crit-Coin — recording ended.')
+    // stop() is re-entrant-safe (stopInFlight); fire-and-forget so this tick's
+    // caller (the awaited server_uptime POST inside stop()'s final tick, OR the
+    // periodic timer) returns promptly rather than awaiting the whole
+    // mix/upload/post pipeline.
+    void this.stop()
   }
 
   /**

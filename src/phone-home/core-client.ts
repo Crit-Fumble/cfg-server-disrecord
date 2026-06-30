@@ -173,9 +173,27 @@ export class CoreServerClient {
     }
   }
 
-  /** POST a billing tick. No-op self-host; best-effort hosted. */
-  async postBillingTick(payload: BillingTickPayload): Promise<void> {
-    if (!this.cfg) return
+  /**
+   * POST a billing tick. No-op self-host; best-effort hosted.
+   *
+   * Returns `{ insufficientCoins }` so a caller (the session-controller's
+   * `server_uptime` tick) can gracefully stop the recording when the user runs
+   * out of Crit-Coin mid-session (#120). The contract is deliberately
+   * conservative: ONLY a genuine HTTP 402 sets `insufficientCoins: true`.
+   *
+   *   - self-host (`cfg == null`)            ⇒ false (never bill, never stop)
+   *   - res.ok (2xx)                         ⇒ false
+   *   - res.status === 402                   ⇒ true  (the stop signal)
+   *   - any OTHER non-2xx                    ⇒ false (warn-log, best-effort no-op)
+   *   - thrown / network error               ⇒ false (warn-log, best-effort no-op)
+   *
+   * CRITICAL: only a true 402 stops a recording. A transient core-server
+   * failure (500, 503, ECONNREFUSED, …) must NOT tear down an in-progress
+   * recording — billing is best-effort, but recording integrity is not
+   * sacrificed to a flaky meter.
+   */
+  async postBillingTick(payload: BillingTickPayload): Promise<{ insufficientCoins: boolean }> {
+    if (!this.cfg) return { insufficientCoins: false }
     const url = this.url('/api/v1/billing/uptime-tick')
     try {
       const res = await fetch(url, {
@@ -183,14 +201,28 @@ export class CoreServerClient {
         headers: this.headers(),
         body: JSON.stringify({ installationId: this.cfg.installationId, ...payload }),
       })
-      if (!res.ok) {
+      if (res.ok) return { insufficientCoins: false }
+      // Any 402 means the user is out of Crit-Coin — parse the body
+      // defensively (it may be absent/malformed) but treat the STATUS as
+      // authoritative. This is the only branch that stops a recording.
+      if (res.status === 402) {
+        await res.json().catch(() => undefined)
         this.logger?.warn(
           { status: res.status, resourceType: payload.resourceType, minutes: payload.minutes },
-          'billing tick POST non-2xx',
+          'billing tick POST 402 — insufficient Crit-Coin',
         )
+        return { insufficientCoins: true }
       }
+      // Every other non-2xx is a transient/unexpected failure: warn, but keep
+      // the recording running (best-effort no-op).
+      this.logger?.warn(
+        { status: res.status, resourceType: payload.resourceType, minutes: payload.minutes },
+        'billing tick POST non-2xx',
+      )
+      return { insufficientCoins: false }
     } catch (err) {
       this.logger?.warn({ err }, 'billing tick POST threw')
+      return { insufficientCoins: false }
     }
   }
 }
