@@ -22,7 +22,12 @@ import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs'
 import { rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { RecordingRingBuffer } from './ring-buffer.js'
-import { createSilencePadState, padSilenceAndAppend, type SilencePadState } from './pcm-silence-pad.js'
+import {
+  createSilencePadState,
+  padSilenceAndAppend,
+  PCM_BYTES_PER_MS,
+  type SilencePadState,
+} from './pcm-silence-pad.js'
 import type { ConsentManager } from '../consent/consent-manager.js'
 import type { Logger } from '../logger.js'
 
@@ -207,6 +212,26 @@ export class PcmCapture {
   /** Number of speakers that have produced at least one chunk file. */
   get speakerCount(): number {
     return this.speakerFiles.size
+  }
+
+  /**
+   * Current wall-clock byte offset on the shared padded timeline (0 before the
+   * first frame). Real-time chunking (#131) windows every speaker at the SAME
+   * offset via this value, so they stay mutually aligned — see
+   * pcm-silence-pad.ts for why byte position tracks wall-clock.
+   */
+  timelineByteNow(): number {
+    const started = this.pad.sessionStartedAtMs
+    if (started == null) return 0
+    const bytes = Math.floor((Date.now() - started) * PCM_BYTES_PER_MS)
+    return bytes % 2 === 0 ? bytes : bytes - 1
+  }
+
+  /** Live snapshot of each speaker's ordered chunk file paths (safe to call mid-session). */
+  snapshotSpeakerFiles(): Map<string, string[]> {
+    const out = new Map<string, string[]>()
+    for (const [userId, paths] of this.speakerFiles) out.set(userId, [...paths])
+    return out
   }
 
   /** Remove the temp directory. Call after post-processing is complete. */

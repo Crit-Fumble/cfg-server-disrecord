@@ -117,6 +117,7 @@ function baseParams(core: never, cfg: CfgHostedConfig | undefined): SessionContr
     deepgramKey: null,
     deepgramModel: 'nova-3',
     deepgramLanguage: 'en',
+    chunkMinutes: 0,
     sink: {} as never,
     cfg,
     core,

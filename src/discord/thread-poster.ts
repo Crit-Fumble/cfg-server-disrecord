@@ -239,6 +239,46 @@ export async function postRecording(
   logger.info({ recordingId, channelId, total }, 'recording posted to Discord')
 }
 
+/** Format a second offset as `mm:ss` for chunk headers. */
+function mmss(sec: number): string {
+  const s = Math.max(0, Math.round(sec))
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`
+}
+
+/**
+ * Upload one real-time recording chunk (#131) into `channelId` — a bite-sized
+ * mp3 posted mid-session so players can catch up on what they missed without
+ * waiting for the whole session to end. Best-effort: a failed send is logged,
+ * never thrown (the whole-session mp3 still carries this span at stop()).
+ */
+export async function postChunk(
+  client: Client,
+  channelId: string,
+  recordingId: string,
+  info: { mp3Path: string; index: number; startSec: number; endSec: number; sizeBytes: number },
+  logger: Logger,
+): Promise<void> {
+  const channel = await client.channels.fetch(channelId).catch(() => null)
+  if (!channel || !channel.isSendable()) {
+    logger.warn({ channelId, recordingId, index: info.index }, 'chunk target not sendable — chunk not posted')
+    return
+  }
+  try {
+    const data = await readFile(info.mp3Path)
+    const partNumber = String(info.index + 1).padStart(2, '0')
+    const sizeMb = (info.sizeBytes / 1_048_576).toFixed(1)
+    const header = `🎧 **Live chunk ${partNumber}** — ${mmss(info.startSec)}–${mmss(info.endSec)} (${sizeMb} MB)`
+    const name = `chunk-${recordingId}-${partNumber}.mp3`
+    await (channel as GuildTextBasedChannel).send({
+      content: header,
+      files: [new AttachmentBuilder(data, { name })],
+    })
+    logger.info({ recordingId, channelId, index: info.index }, 'live chunk posted to thread')
+  } catch (err) {
+    logger.warn({ err, recordingId, index: info.index }, 'failed to post live chunk (non-fatal)')
+  }
+}
+
 /** Resolve the temp dir for a finalized result (sibling of the mp3). */
 export function tempDirOf(mp3Path: string): string {
   return join(mp3Path, '..')

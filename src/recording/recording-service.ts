@@ -96,6 +96,7 @@ export class RecordingService {
       deepgramKey: this.config.deepgramKey ?? null,
       deepgramModel: this.config.deepgramModel,
       deepgramLanguage: this.config.deepgramLanguage,
+      chunkMinutes: this.config.chunkMinutes,
       sink: this.sink,
       invokerUserId: req.invokerUserId,
       cfg: this.config.cfg,

@@ -25,7 +25,8 @@ import { RecordingSession, type TranscriptFinalEvent, type TranscriptInterimEven
 import { buildDeepgramTokenProvider } from '../deepgram/index.js'
 import { ConsentManager } from '../consent/consent-manager.js'
 import { processRecording } from './post-process.js'
-import { createRecordingThread, postRecording, tempDirOf } from '../discord/thread-poster.js'
+import { ChunkRecorder, type ChunkInfo } from './chunk-recorder.js'
+import { createRecordingThread, postChunk, postRecording, tempDirOf } from '../discord/thread-poster.js'
 import { SpeakerWebhookManager } from '../discord/speaker-webhook.js'
 import { ConsentSync } from '../phone-home/consent-sync.js'
 import type { CoreServerClient } from '../phone-home/core-client.js'
@@ -74,6 +75,8 @@ export interface SessionControllerParams {
   deepgramKey: string | null
   deepgramModel: string
   deepgramLanguage: string
+  /** Real-time mp3 chunking cadence in minutes (#131). `<= 0` disables it. */
+  chunkMinutes: number
   /** Output sink for the finalized mp3 + VTT. */
   sink: OutputSink
   /** Discord user id of the invoker — pre-consented. */
@@ -105,6 +108,8 @@ export class SessionController {
   private tempDir = ''
   private consent!: ConsentManager
   private pcmCapture!: PcmCapture
+  /** Real-time mp3 chunker (#131). Constructed in start(); a no-op when chunkMinutes<=0. */
+  private chunkRecorder: ChunkRecorder | null = null
   private session!: RecordingSession
   private voice!: VoiceCapture
   private readonly captions: CaptionEntry[] = []
@@ -422,10 +427,30 @@ export class SessionController {
       p.cfg?.transcriptionCtPerMinute != null && effectiveMode === 'platform'
     if (p.cfg) this.startBillingTimer()
 
+    // Real-time mp3 chunking (#131) — additive + gated. A no-op unless
+    // chunkMinutes>0; when armed it posts a windowed chunk into this thread on
+    // the cadence + on pause/stop. Reads the same per-speaker PCM the mixer uses.
+    this.chunkRecorder = new ChunkRecorder({
+      recordingId: this.recordingId,
+      chunkMinutes: p.chunkMinutes,
+      tempDir: this.tempDir,
+      getSpeakerFiles: () => this.pcmCapture.snapshotSpeakerFiles(),
+      timelineByteNow: () => this.pcmCapture.timelineByteNow(),
+      postChunk: (info) => this.postChunkToThread(info),
+      logger: this.logger,
+    })
+    this.chunkRecorder.start()
+
     this.logger.info(
       { recordingId: this.recordingId, guildId: this.guildId, transcription: tokenProvider != null },
       'recording session started',
     )
+  }
+
+  /** Upload one live chunk into the recording thread (#131). No-op without a thread. */
+  private async postChunkToThread(info: ChunkInfo): Promise<void> {
+    if (!this.threadId) return
+    await postChunk(this.params.client, this.threadId, this.recordingId, info, this.logger)
   }
 
   pause(): void {
@@ -434,6 +459,8 @@ export class SessionController {
     this.billingMeter.pause(Date.now())
     this.pcmCapture.setPaused(true)
     this.session.setPaused(true)
+    // Flush the in-progress chunk so paused players can hear up to the break.
+    void this.chunkRecorder?.onPause()
     this.logger.info({ recordingId: this.recordingId }, 'recording paused')
   }
 
@@ -443,6 +470,8 @@ export class SessionController {
     this.billingMeter.resume(Date.now())
     this.pcmCapture.setPaused(false)
     this.session.setPaused(false)
+    // Skip the paused span so the next chunk isn't buried under pause silence.
+    this.chunkRecorder?.onResume()
     this.logger.info({ recordingId: this.recordingId }, 'recording resumed')
   }
 
@@ -588,6 +617,12 @@ export class SessionController {
 
     await this.pcmCapture.onSessionStop()
     this.logger.info({ recordingId: rid }, '[runStop] 2/9 pcm capture stopped')
+
+    // Flush the trailing chunk (#131) now that the final PCM is on disk, before
+    // temp cleanup — best-effort, never blocks the whole-session mp3.
+    await this.chunkRecorder?.finalize().catch((err) =>
+      this.logger.warn({ err, recordingId: rid }, 'final chunk flush failed'),
+    )
 
     await this.session.stop()
     this.logger.info({ recordingId: rid }, '[runStop] 3/9 recording session stopped')

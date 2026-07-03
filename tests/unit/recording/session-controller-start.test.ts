@@ -139,6 +139,7 @@ function baseParams(overrides: Partial<SessionControllerParams> = {}): SessionCo
     deepgramKey: null,
     deepgramModel: 'nova-3',
     deepgramLanguage: 'en',
+    chunkMinutes: 0,
     sink: {} as never,
     core: fakeCore(),
     logger: silentLogger,

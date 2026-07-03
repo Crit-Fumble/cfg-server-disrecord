@@ -63,6 +63,15 @@ export interface StandaloneConfig {
   deepgramLanguage: string
   /** Local directory finalized mp3 + VTT land in. Default `/data/recordings`. */
   outputDir: string
+  /**
+   * Real-time mp3 chunking cadence in minutes (#131). `0` (the default)
+   * disables chunking — the session behaves exactly as before, producing only
+   * the whole-session mp3 at stop(). When `> 0`, a chunk mp3 covering the last
+   * window is posted into the transcript thread every N minutes (and on
+   * pause/stop). Keep it small enough that a chunk stays under Discord's ~9 MB
+   * cap (≈1 MB/min of mixed audio ⇒ 8 is a safe default when enabled).
+   */
+  chunkMinutes: number
   /** HTTP control-server port. Default 8080. */
   controlPort: number
   /**
@@ -208,6 +217,14 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     deepgramMode = deepgramKey ? 'byok' : 'disabled'
   }
 
+  // Real-time chunking cadence (#131). Unset/empty ⇒ 0 ⇒ disabled. Must be a
+  // finite, non-negative number; a malformed value fails loudly at boot.
+  const chunkRaw = process.env.DISRECORD_CHUNK_MINUTES
+  const chunkMinutes = chunkRaw ? Number(chunkRaw) : 0
+  if (!Number.isFinite(chunkMinutes) || chunkMinutes < 0) {
+    throw new Error(`Invalid DISRECORD_CHUNK_MINUTES: ${chunkRaw}`)
+  }
+
   return {
     discordToken: requireEnv('DISRECORD_DISCORD_TOKEN'),
     deepgramKey,
@@ -218,6 +235,7 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     controlPort,
     controlToken: process.env.CONTROL_TOKEN || undefined,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
+    chunkMinutes,
     cfg: resolveCfgHostedConfig(),
   }
 }
