@@ -85,6 +85,7 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
 import { SessionController, type SessionControllerParams } from '../../../src/recording/session-controller.js'
 import { ConsentManager } from '../../../src/consent/consent-manager.js'
 import type { CoreServerClient } from '../../../src/phone-home/core-client.js'
+import type { CfgHostedConfig } from '../../../src/config.js'
 
 const silentLogger = {
   info: jest.fn(),
@@ -316,6 +317,68 @@ describe('SessionController.start() — issue #5 (revised)', () => {
 
     postSessionStartSpy.mockRestore()
     consentStopSpy.mockRestore()
+  })
+})
+
+// ── BYOK transcription-billing gate (#36) ────────────────────────────────────
+// The money guarantee behind "Bring Your Own (Deepgram) Key": a BYOK session
+// must NEVER incur the platform's `transcription` surcharge tick — the user is
+// paying Deepgram directly. The gate is the `transcriptionBilled` flag derived
+// in start():
+//   transcriptionBilled = cfg.transcriptionCtPerMinute != null
+//                          && effectiveMode === 'platform'
+//   effectiveMode        = transcription ? deepgramMode : 'disabled'
+// These tests pin the derivation directly (with the platform surcharge rate
+// configured, so `deepgramMode` is the ONLY thing deciding the flag). The
+// billing suite (session-controller-billing.test.ts) separately proves that a
+// false flag means the `transcription` tick is never posted — together they
+// close #36's "No transcription CT charge for BYOK sessions".
+describe('SessionController.start() — BYOK transcription-billing gate (#36)', () => {
+  const HOSTED: CfgHostedConfig = {
+    coreServerUrl: 'http://core:3001',
+    coreServerToken: 'jwt-token',
+    installationId: 'inst-1',
+    userId: 'user-1',
+    ctPerMinute: 13,
+    size: 'small',
+    transcriptionCtPerMinute: 7, // platform surcharge IS configured...
+  }
+  const transcriptionBilledOf = (c: SessionController) =>
+    (c as unknown as { transcriptionBilled: boolean }).transcriptionBilled
+  // start() arms an unref'd billing interval when cfg is present; clear it so
+  // nothing lingers between tests.
+  const clearBillingTimer = (c: SessionController) => {
+    const t = (c as unknown as { billingTimer: NodeJS.Timeout | null }).billingTimer
+    if (t) clearInterval(t)
+  }
+
+  it("does NOT bill the transcription surcharge for a BYOK session (user's own Deepgram key)", async () => {
+    const controller = new SessionController(
+      baseParams({ cfg: HOSTED, transcription: true, deepgramMode: 'byok', deepgramKey: 'sk-user-key' }),
+    )
+    await controller.start()
+    // ...but BYOK routes transcription through the user's own key, so the
+    // platform surcharge must stay off.
+    expect(transcriptionBilledOf(controller)).toBe(false)
+    clearBillingTimer(controller)
+  })
+
+  it('DOES bill the transcription surcharge on the platform Deepgram key', async () => {
+    const controller = new SessionController(
+      baseParams({ cfg: HOSTED, transcription: true, deepgramMode: 'platform', deepgramKey: null }),
+    )
+    await controller.start()
+    expect(transcriptionBilledOf(controller)).toBe(true)
+    clearBillingTimer(controller)
+  })
+
+  it('does NOT bill the surcharge when transcription is disabled, even on the platform key', async () => {
+    const controller = new SessionController(
+      baseParams({ cfg: HOSTED, transcription: false, deepgramMode: 'platform', deepgramKey: null }),
+    )
+    await controller.start()
+    expect(transcriptionBilledOf(controller)).toBe(false)
+    clearBillingTimer(controller)
   })
 })
 
