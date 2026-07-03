@@ -447,10 +447,23 @@ export class SessionController {
     )
   }
 
-  /** Upload one live chunk into the recording thread (#131). No-op without a thread. */
+  /**
+   * Upload one live chunk into the recording thread (#131), then (CFG-hosted)
+   * persist its metadata for the offline archive. No-op without a thread; the
+   * metadata POST is a clean no-op self-host.
+   */
   private async postChunkToThread(info: ChunkInfo): Promise<void> {
     if (!this.threadId) return
-    await postChunk(this.params.client, this.threadId, this.recordingId, info, this.logger)
+    const messageId = await postChunk(this.params.client, this.threadId, this.recordingId, info, this.logger)
+    await this.params.core.postChunk({
+      chunkIndex: info.index,
+      startSec: info.startSec,
+      endSec: info.endSec,
+      sizeBytes: info.sizeBytes,
+      speakerCount: info.speakers,
+      discordMessageId: messageId ?? undefined,
+      discordChannelId: this.threadId,
+    })
   }
 
   pause(): void {

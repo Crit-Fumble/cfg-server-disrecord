@@ -83,6 +83,8 @@ export interface ChunkInfo {
   startSec: number
   endSec: number
   sizeBytes: number
+  /** Distinct speakers whose audio landed in this window. */
+  speakers: number
 }
 
 export interface ChunkRecorderParams {
@@ -195,7 +197,7 @@ export class ChunkRecorder {
         return
       }
 
-      await this.p.postChunk({ mp3Path, index, startSec, endSec, sizeBytes })
+      await this.p.postChunk({ mp3Path, index, startSec, endSec, sizeBytes, speakers: windowFiles.size })
       await this.rmAll([mp3Path])
       this.p.logger.info(
         { recordingId: this.p.recordingId, reason, index, startSec, endSec, sizeBytes, speakers: windowFiles.size },

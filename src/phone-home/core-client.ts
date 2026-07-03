@@ -69,6 +69,17 @@ export interface DeepgramTokenResult {
   expiresIn: number
 }
 
+/** Metadata for one real-time recording chunk (#131) — the audio is uploaded to Discord separately. */
+export interface ChunkMetadataPayload {
+  chunkIndex: number
+  startSec: number
+  endSec: number
+  sizeBytes?: number
+  speakerCount?: number
+  discordMessageId?: string
+  discordChannelId?: string
+}
+
 /** Empty policy used both as the no-op return and the unreachable-core fallback. */
 const EMPTY_POLICY: SessionPolicy = { consentedUserIds: [], speakerNames: {} }
 
@@ -223,6 +234,29 @@ export class CoreServerClient {
     } catch (err) {
       this.logger?.warn({ err }, 'billing tick POST threw')
       return { insufficientCoins: false }
+    }
+  }
+
+  /**
+   * POST one chunk's metadata for the offline session archive (#131). No-op
+   * self-host; best-effort hosted — a failure is warn-logged and swallowed
+   * (chunking is additive, so a missed bookkeeping row never affects the
+   * recording or the already-uploaded Discord chunk).
+   */
+  async postChunk(payload: ChunkMetadataPayload): Promise<void> {
+    if (!this.cfg) return
+    const url = this.url('/api/v1/recording/chunks')
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ installationId: this.cfg.installationId, ...payload }),
+      })
+      if (!res.ok) {
+        this.logger?.warn({ status: res.status, chunkIndex: payload.chunkIndex }, 'chunk metadata POST non-2xx')
+      }
+    } catch (err) {
+      this.logger?.warn({ err, chunkIndex: payload.chunkIndex }, 'chunk metadata POST threw')
     }
   }
 }

@@ -257,11 +257,11 @@ export async function postChunk(
   recordingId: string,
   info: { mp3Path: string; index: number; startSec: number; endSec: number; sizeBytes: number },
   logger: Logger,
-): Promise<void> {
+): Promise<string | null> {
   const channel = await client.channels.fetch(channelId).catch(() => null)
   if (!channel || !channel.isSendable()) {
     logger.warn({ channelId, recordingId, index: info.index }, 'chunk target not sendable — chunk not posted')
-    return
+    return null
   }
   try {
     const data = await readFile(info.mp3Path)
@@ -269,13 +269,15 @@ export async function postChunk(
     const sizeMb = (info.sizeBytes / 1_048_576).toFixed(1)
     const header = `🎧 **Live chunk ${partNumber}** — ${mmss(info.startSec)}–${mmss(info.endSec)} (${sizeMb} MB)`
     const name = `chunk-${recordingId}-${partNumber}.mp3`
-    await (channel as GuildTextBasedChannel).send({
+    const message = await (channel as GuildTextBasedChannel).send({
       content: header,
       files: [new AttachmentBuilder(data, { name })],
     })
     logger.info({ recordingId, channelId, index: info.index }, 'live chunk posted to thread')
+    return message.id
   } catch (err) {
     logger.warn({ err, recordingId, index: info.index }, 'failed to post live chunk (non-fatal)')
+    return null
   }
 }
 
