@@ -83,7 +83,7 @@ export async function createRecordingThread(
     try {
       thread = await (channel as TextChannel).threads.create({
         name: threadName,
-        autoArchiveDuration: 1440,
+        autoArchiveDuration: 10080, // 7 days (Discord max) — keep the recording thread open a full week
         type: ChannelType.PrivateThread,
         invitable: false,
       })
@@ -94,7 +94,7 @@ export async function createRecordingThread(
       )
       thread = await (channel as TextChannel).threads.create({
         name: threadName,
-        autoArchiveDuration: 1440,
+        autoArchiveDuration: 10080, // 7 days (Discord max) — keep the recording thread open a full week
         type: ChannelType.PrivateThread,
       })
     }
