@@ -945,6 +945,16 @@ export class SessionController {
    * posted one for this utterance; otherwise posts fresh. Either way
    * clears the speaker's interim slot so the next utterance starts a new
    * message — Discord groups consecutive same-speaker messages visually.
+   *
+   * Why edit-in-place rather than batching: Discord rate-limits messages per
+   * channel (~5 per 5s) and caps them at 2000 chars, so one POST per utterance
+   * gets 429'd and silently drops lines. core-server once carried a queue-and-
+   * coalesce layer for this (`transcript-thread-poster`, deleted — it was never
+   * wired up). Editing one message per in-flight utterance solves the same
+   * problem with fewer calls AND gives live-updating captions, which batching
+   * cannot: the reader watches a line refine itself instead of waiting for a
+   * drain tick. `enqueueSpeakerOp` serializes per speaker so an edit can never
+   * race the post that created the message it edits.
    */
   private postFinalCaption(event: TranscriptFinalEvent): void {
     if (!this.threadId) return
