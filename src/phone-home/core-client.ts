@@ -152,6 +152,33 @@ export class CoreServerClient {
   }
 
   /**
+   * Report the Discord thread this recording created, so core-server can hand
+   * it back on the next start and address it directly.
+   *
+   * Without this the worker was the only holder of the id, so a restart had no
+   * way to reuse the thread and made an identically-named duplicate instead.
+   *
+   * Best-effort, like every other report here: losing it costs thread reuse on
+   * the next start, never the recording in progress.
+   */
+  async postRecordingThread(threadId: string, parentChannelId: string | null): Promise<void> {
+    if (!this.cfg) return
+    const url = this.url('/api/v1/recording/thread')
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ installationId: this.cfg.installationId, threadId, parentChannelId }),
+      })
+      if (!res.ok) {
+        this.logger?.warn({ status: res.status, threadId }, 'recording-thread POST non-2xx')
+      }
+    } catch (err) {
+      this.logger?.warn({ err, threadId }, 'recording-thread POST threw')
+    }
+  }
+
+  /**
    * Fetch a short-lived Deepgram grant token for platform-mode transcription.
    *
    * Returns `null` when self-host (no `cfg`) or when core-server is

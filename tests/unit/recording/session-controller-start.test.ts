@@ -125,6 +125,7 @@ function fakeCore(): CoreServerClient {
     fetchSessionPolicy: jest.fn(async () => ({ consentedUserIds: [], speakerNames: {} })),
     postTranscript: jest.fn(),
     postBillingTick: jest.fn(),
+    postRecordingThread: jest.fn(async () => {}),
   } as never
 }
 

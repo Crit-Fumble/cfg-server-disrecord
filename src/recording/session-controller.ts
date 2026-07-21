@@ -82,6 +82,12 @@ export interface SessionControllerParams {
   /** Discord user id of the invoker — pre-consented. */
   invokerUserId?: string
   /**
+   * Reuse this thread rather than creating one. Set by core-server when the
+   * GM picked a thread, or when an earlier recording in the same session
+   * already has one — which is what stops a restart producing a duplicate.
+   */
+  existingThreadId?: string | null
+  /**
    * CFG-hosted config. Present ⇒ the controller wires billing ticks,
    * consent-sync, and transcript phone-home. Absent ⇒ pure self-host.
    */
@@ -372,14 +378,27 @@ export class SessionController {
     // (genuine no-thread fallback) and `deliver` refuses to post the mp3.
     const voiceChannelName = await this.voiceChannelName(p.client)
     const threadMembers = Array.from(new Set([p.invokerUserId, ...memberIds].filter((id): id is string => !!id)))
-    this.threadId = await createRecordingThread(
-      p.client,
-      p.textChannelId,
-      voiceChannelName,
-      p.transcription,
-      threadMembers,
-      this.logger,
-    )
+    if (p.existingThreadId) {
+      // Reuse. Creating unconditionally is what produced duplicate threads
+      // with identical names on every stop/restart within a session.
+      this.threadId = p.existingThreadId
+      this.logger.info(
+        { recordingId: this.recordingId, threadId: this.threadId },
+        'reusing existing recording thread',
+      )
+    } else {
+      this.threadId = await createRecordingThread(
+        p.client,
+        p.textChannelId,
+        voiceChannelName,
+        p.transcription,
+        threadMembers,
+        this.logger,
+      )
+      // Report it home so core-server can hand it back on the next start (and
+      // address the thread itself). No-op in self-host.
+      if (this.threadId) void this.reportThread(this.threadId, p.textChannelId)
+    }
     // Wire the thread id into the consent manager. This ALSO flushes any
     // prompts that the voice listeners queued during the join→now window:
     // into the thread when non-null, or to the parent channel when thread
@@ -500,6 +519,18 @@ export class SessionController {
    * Apply a consent update pushed by core-server (CFG-hosted only). No-op
    * when this session has no consent-sync wired (self-host).
    */
+  /**
+   * Tell core-server which thread this recording is using. Fire-and-forget:
+   * the core client is a no-op in self-host, and a failure only costs thread
+   * reuse on the NEXT start, never this recording.
+   */
+  private async reportThread(threadId: string, parentChannelId: string | null): Promise<void> {
+    if (!this.params.cfg) return
+    await this.params.core.postRecordingThread(threadId, parentChannelId).catch((err: unknown) => {
+      this.logger.warn({ err, recordingId: this.recordingId, threadId }, 'thread report failed')
+    })
+  }
+
   pushConsent(userId: string, consented: boolean): void {
     this.consentSync?.applyPushedUpdate(userId, consented)
   }

@@ -8,7 +8,7 @@
  *                Auth is the per-session JWT (see `control/auth.ts`).
  *
  * API:
- *   POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription? } → { recordingId }
+ *   POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription?, threadId? } → { recordingId }
  *   POST /v1/recordings/:id/pause  → 204
  *   POST /v1/recordings/:id/resume → 204
  *   POST /v1/recordings/:id/stop   → 200   (blocks until delivery complete)
@@ -48,6 +48,8 @@ interface StartBody {
   textChannelId?: string
   transcription?: boolean
   invokerUserId?: string
+  /** Reuse this thread instead of creating one — see StartRecordingRequest. */
+  threadId?: string
 }
 
 interface ConsentBody {
@@ -90,6 +92,7 @@ export async function startControlServer(params: ControlServerParams): Promise<F
         guildId: body.guildId,
         voiceChannelId: body.voiceChannelId,
         textChannelId: body.textChannelId,
+        threadId: body.threadId,
         transcription: body.transcription,
         invokerUserId: body.invokerUserId,
       })

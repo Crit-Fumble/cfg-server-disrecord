@@ -30,6 +30,15 @@ export interface StartRecordingRequest {
   transcription?: boolean
   /** Discord user id of the invoker — pre-consented. */
   invokerUserId?: string
+  /**
+   * Reuse this existing thread instead of creating one.
+   *
+   * Without it every start created a NEW thread named
+   * `<voice> - <date> - <kind>` — so stopping and restarting within a session,
+   * or restarting after a drop, left identically-named duplicates. The caller
+   * (core-server) decides which thread that is; the worker just honours it.
+   */
+  threadId?: string
 }
 
 export class RecordingService {
@@ -99,6 +108,7 @@ export class RecordingService {
       chunkMinutes: this.config.chunkMinutes,
       sink: this.sink,
       invokerUserId: req.invokerUserId,
+      existingThreadId: req.threadId ?? null,
       cfg: this.config.cfg,
       core: this.core,
       logger: this.logger.child({ recordingId }),
