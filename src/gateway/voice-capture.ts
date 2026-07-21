@@ -34,6 +34,41 @@ import { recoverVoiceConnection } from './voice-reconnect.js'
 const PCM_SAMPLE_RATE = 48_000
 const PCM_CHANNELS = 1
 
+/**
+ * How long after a gateway (re)connect a "we left voice" delta is treated as
+ * outage fallout rather than a deliberate kick. Mirrors core-server's
+ * `READY_SETTLE_MS` in events-gateway.ts — same hazard, same shape.
+ */
+const RECONNECT_SETTLE_MS = 15_000
+
+/**
+ * Decide whether a voice-state change means "a human removed this bot from
+ * the channel we are recording".
+ *
+ * Pulled out as a pure function because it is the whole policy: close codes
+ * cannot express it. Discord sends 4014 for BOTH a deliberate kick and a
+ * dropped gateway session, so keying off the code either fights real kicks or
+ * abandons real blips. The bot's own voice state is unambiguous.
+ *
+ * Returns a human-readable reason, or null when the change is not our removal.
+ */
+export function classifyOwnRemoval(params: {
+  botUserId: string | undefined
+  ourChannelId: string
+  subjectId: string
+  oldChannelId: string | null
+  newChannelId: string | null
+}): string | null {
+  const { botUserId, ourChannelId, subjectId, oldChannelId, newChannelId } = params
+  if (!botUserId || subjectId !== botUserId) return null
+  // Only a transition OUT of the channel we are recording counts. Joining it,
+  // or any change while already elsewhere, is not a removal.
+  if (oldChannelId !== ourChannelId || newChannelId === ourChannelId) return null
+  return newChannelId === null
+    ? 'disconnected from voice by a user'
+    : `moved to another voice channel by a user (${newChannelId})`
+}
+
 export class VoiceJoinError extends Error {
   constructor(message: string, public readonly cause?: unknown) {
     super(message)
@@ -51,6 +86,13 @@ export interface VoiceCaptureParams {
   pcmCapture: PcmCapture
   /** Consent source — drives late-joiner prompts on voice-state changes. */
   consent: ConsentManager
+  /**
+   * Called when a HUMAN removes the bot from voice (Discord's "Disconnect",
+   * a move to another channel, or the channel being deleted). That is an
+   * instruction, not a fault: the recording should end rather than be
+   * rejoined. Absent ⇒ the capture just stands down without ending anything.
+   */
+  onExplicitDisconnect?: (reason: string) => void
   logger: Logger
 }
 
@@ -74,6 +116,20 @@ export class VoiceCapture {
   private stopped = false
   /** Guards against overlapping recovery loops when Disconnected fires repeatedly. */
   private recovering = false
+  /**
+   * Set when a human removed the bot from voice. Suppresses recovery — we do
+   * NOT rejoin a channel someone deliberately kicked us out of.
+   */
+  private explicitlyRemoved = false
+  /**
+   * When the gateway last (re)connected. A voice-state "we left" delta that
+   * lands right after a resume is almost certainly Discord reconciling a
+   * server-side drop from the outage we just rode out — NOT a human kick.
+   * Treating it as deliberate would end a recording on exactly the blip this
+   * whole module exists to survive, so those deltas are ignored.
+   */
+  private lastShardReconnectAt = 0
+  private shardListeners: Array<[string, (...args: unknown[]) => void]> = []
 
   constructor(private readonly params: VoiceCaptureParams) {}
 
@@ -131,6 +187,38 @@ export class VoiceCapture {
     // the event.
     this.voiceStateListener = (oldState, newState) => {
       try {
+        // OUR OWN removal, checked FIRST — the generic guards below would
+        // swallow it (a bot leaving trips both the `oldState` early-return
+        // and the bot-member skip).
+        //
+        // This is the authoritative signal for "a human disconnected us".
+        // Close codes cannot carry it: Discord sends 4014 both for a
+        // deliberate kick AND for a dropped gateway session, so keying off
+        // the code alone would either fight real kicks or abandon real
+        // blips. The voice state is unambiguous.
+        if (newState.id === client.user?.id) {
+          const reason = classifyOwnRemoval({
+            botUserId: client.user?.id,
+            ourChannelId: voiceChannelId,
+            subjectId: newState.id,
+            oldChannelId: oldState.channelId,
+            newChannelId: newState.channelId,
+          })
+          if (reason && !this.stopped) {
+            const sinceReconnect = Date.now() - this.lastShardReconnectAt
+            if (sinceReconnect < RECONNECT_SETTLE_MS) {
+              logger.warn(
+                { guildId, voiceChannelId, reason, sinceReconnect },
+                'ignoring voice-state removal inside the reconnect settling window — treating as outage fallout, not a kick',
+              )
+              return
+            }
+            this.explicitlyRemoved = true
+            logger.info({ guildId, voiceChannelId, reason }, 'bot removed from voice — ending recording, not rejoining')
+            this.params.onExplicitDisconnect?.(reason)
+          }
+          return
+        }
         if (oldState.channelId === voiceChannelId) return // already here / left from here
         if (newState.channelId !== voiceChannelId) return // not joining our channel
         if (newState.member?.user?.bot) return // skip bot members (including ourselves)
@@ -143,6 +231,16 @@ export class VoiceCapture {
       }
     }
     client.on('voiceStateUpdate', this.voiceStateListener)
+
+    // Stamp every (re)connect so the settling window above can tell outage
+    // fallout from a deliberate kick.
+    for (const evt of ['shardResume', 'shardReady', 'ready'] as const) {
+      const fn = () => {
+        this.lastShardReconnectAt = Date.now()
+      }
+      client.on(evt, fn)
+      this.shardListeners.push([evt, fn])
+    }
 
     this.connection = connection
     logger.info({ guildId, voiceChannelId }, 'voice channel joined; capturing audio')
@@ -159,12 +257,22 @@ export class VoiceCapture {
    * them here would drop audio, not restore it.
    */
   private async onDisconnected(connection: VoiceConnection): Promise<void> {
-    if (this.stopped || this.recovering) return
+    if (this.stopped || this.recovering || this.explicitlyRemoved) return
     this.recovering = true
     const { guildId, voiceChannelId, logger } = this.params
     logger.warn({ guildId, voiceChannelId }, 'voice connection disconnected — attempting recovery')
 
     try {
+      // The websocket close and the voiceStateUpdate that explains it race.
+      // Give the state a moment to land before deciding this was a fault
+      // rather than an instruction — otherwise a deliberate kick briefly
+      // looks like a blip and we start rejoining before standing down.
+      await new Promise((resolve) => setTimeout(resolve, 1_500))
+      if (this.explicitlyRemoved || this.stopped) {
+        logger.info({ guildId }, 'voice loss was a deliberate removal — standing down without rejoining')
+        return
+      }
+
       // The library auto-rejoins on its own for non-4014 closes. Give that a
       // brief grace period before we start sending our own join payloads, so
       // we don't race it during an ordinary blip.
@@ -183,7 +291,9 @@ export class VoiceCapture {
             await entersState(connection, VoiceConnectionStatus.Ready, timeoutMs)
           },
           isDestroyed: () =>
-            this.stopped || connection.state.status === VoiceConnectionStatus.Destroyed,
+            this.stopped ||
+            this.explicitlyRemoved ||
+            connection.state.status === VoiceConnectionStatus.Destroyed,
           sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
           now: () => Date.now(),
           logger,
@@ -246,6 +356,10 @@ export class VoiceCapture {
       this.params.client.off('voiceStateUpdate', this.voiceStateListener)
       this.voiceStateListener = null
     }
+    for (const [evt, fn] of this.shardListeners) {
+      this.params.client.off(evt, fn as never)
+    }
+    this.shardListeners = []
     for (const stream of this.subscriptions.values()) {
       stream.destroy()
     }

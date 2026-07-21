@@ -305,6 +305,14 @@ export class SessionController {
       session: this.session,
       pcmCapture: this.pcmCapture,
       consent: this.consent,
+      // A human disconnecting the bot is an instruction to stop, not a fault
+      // to recover from. End the recording the normal way so the mix, VTT and
+      // thread post all still happen — stop() is re-entrant-safe, and
+      // fire-and-forget keeps us off the gateway event loop.
+      onExplicitDisconnect: (reason) => {
+        this.logger.info({ recordingId: this.recordingId, reason }, 'ending recording — bot was removed from voice')
+        void this.stop()
+      },
       logger: this.logger,
     })
 
