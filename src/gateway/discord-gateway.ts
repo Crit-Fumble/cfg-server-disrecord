@@ -43,6 +43,26 @@ export async function startGateway(token: string, logger: Logger): Promise<Clien
     logger.error({ err: err.message }, 'discord client error')
   })
 
+  // Shard lifecycle. discord.js reconnects and RESUMEs shards on its own, so
+  // these are deliberately observability-only — nothing here tears the client
+  // down. A momentary Discord lapse shows up as
+  // shardDisconnect → shardReconnecting → shardResume, and the voice
+  // connection recovers separately (see voice-reconnect.ts). Without these
+  // lines a blip during a live recording leaves no trace in the logs at all,
+  // which is what made the previous drops so hard to diagnose.
+  client.on('shardDisconnect', (event, shardId) => {
+    logger.warn({ shardId, code: event?.code }, 'discord shard disconnected — awaiting auto-reconnect')
+  })
+  client.on('shardReconnecting', (shardId) => {
+    logger.warn({ shardId }, 'discord shard reconnecting')
+  })
+  client.on('shardResume', (shardId, replayedEvents) => {
+    logger.info({ shardId, replayedEvents }, 'discord shard resumed')
+  })
+  client.on('shardError', (err, shardId) => {
+    logger.error({ shardId, err: err.message }, 'discord shard error — auto-reconnect will follow')
+  })
+
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(
       () => reject(new Error(`Discord gateway ready timeout (${READY_TIMEOUT_MS}ms)`)),

@@ -28,6 +28,7 @@ import type { Logger } from '../logger.js'
 import type { RecordingSession } from '../recording/recording-session.js'
 import type { PcmCapture } from '../recording/pcm-capture.js'
 import type { ConsentManager } from '../consent/consent-manager.js'
+import { recoverVoiceConnection } from './voice-reconnect.js'
 
 /** 48 kHz mono — what Deepgram + PcmCapture both expect. */
 const PCM_SAMPLE_RATE = 48_000
@@ -69,6 +70,10 @@ export class VoiceCapture {
    * session ends — leaks would accumulate across self-host sessions.
    */
   private voiceStateListener: ((oldState: VoiceState, newState: VoiceState) => void) | null = null
+  /** Set by {@link leave} so in-flight recovery stands down instead of resurrecting voice. */
+  private stopped = false
+  /** Guards against overlapping recovery loops when Disconnected fires repeatedly. */
+  private recovering = false
 
   constructor(private readonly params: VoiceCaptureParams) {}
 
@@ -112,6 +117,12 @@ export class VoiceCapture {
     connection.receiver.speaking.on('start', (userId: string) => this.onSpeakerStart(userId))
     connection.receiver.speaking.on('end', (userId: string) => this.onSpeakerEnd(userId))
 
+    // A dropped voice connection must never silently end the capture. See
+    // voice-reconnect.ts for why the library's own retry is not enough.
+    connection.on(VoiceConnectionStatus.Disconnected, () => {
+      void this.onDisconnected(connection)
+    })
+
     // Voice-join consent trigger. Discord fires voiceStateUpdate for
     // joins, leaves, mutes, deafens, channel switches — we filter to
     // "joined OUR voice channel for the first time" and prompt then.
@@ -135,6 +146,55 @@ export class VoiceCapture {
 
     this.connection = connection
     logger.info({ guildId, voiceChannelId }, 'voice channel joined; capturing audio')
+  }
+
+  /**
+   * Recover a dropped voice connection.
+   *
+   * Deliberately does NOT rebuild the receiver subscriptions. In
+   * `@discordjs/voice` the `AudioReceiveStream`s are torn down only on the
+   * `Destroyed` status, and `updateReceiveBindings` re-points the receiver's
+   * ws/udp handlers at the new networking instance on every rejoin — so the
+   * existing per-speaker streams keep flowing once Ready returns. Recreating
+   * them here would drop audio, not restore it.
+   */
+  private async onDisconnected(connection: VoiceConnection): Promise<void> {
+    if (this.stopped || this.recovering) return
+    this.recovering = true
+    const { guildId, voiceChannelId, logger } = this.params
+    logger.warn({ guildId, voiceChannelId }, 'voice connection disconnected — attempting recovery')
+
+    try {
+      // The library auto-rejoins on its own for non-4014 closes. Give that a
+      // brief grace period before we start sending our own join payloads, so
+      // we don't race it during an ordinary blip.
+      try {
+        await entersState(connection, VoiceConnectionStatus.Ready, 5_000)
+        logger.info({ guildId }, 'voice connection self-healed — audio capture resumed')
+        return
+      } catch {
+        /* fall through to driven recovery */
+      }
+
+      await recoverVoiceConnection(
+        {
+          rejoin: () => connection.rejoin(),
+          awaitReady: async (timeoutMs) => {
+            await entersState(connection, VoiceConnectionStatus.Ready, timeoutMs)
+          },
+          isDestroyed: () =>
+            this.stopped || connection.state.status === VoiceConnectionStatus.Destroyed,
+          sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+          now: () => Date.now(),
+          logger,
+        },
+        {},
+      )
+    } catch (err) {
+      logger.error({ err, guildId }, 'voice recovery loop threw unexpectedly')
+    } finally {
+      this.recovering = false
+    }
   }
 
   private onSpeakerStart(userId: string): void {
@@ -179,6 +239,9 @@ export class VoiceCapture {
 
   /** Leave the voice channel and tear down all subscriptions. Idempotent. */
   leave(reason: string): void {
+    // Set before anything else so an in-flight recovery loop stands down
+    // rather than rejoining a channel we are deliberately leaving.
+    this.stopped = true
     if (this.voiceStateListener) {
       this.params.client.off('voiceStateUpdate', this.voiceStateListener)
       this.voiceStateListener = null
