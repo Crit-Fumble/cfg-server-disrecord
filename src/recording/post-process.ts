@@ -18,6 +18,7 @@ import type { RecordingResult } from './pcm-capture.js'
 import type { CaptionEntry } from './caption-types.js'
 import type { OutputSink, RecordingMeta } from './output-sink.js'
 import type { Logger } from '../logger.js'
+import { logScratchUsageBeforeMix } from './scratch-telemetry.js'
 
 /** Silence longer than this at the start/end of the mix is trimmed to a 1s buffer. */
 const SILENCE_TRIM_BUFFER_SEC = 1
@@ -61,6 +62,14 @@ export async function processRecording(
   }
 
   const outputPath = join(tempDir, 'mixed.mp3')
+
+  // Record scratch headroom before the mix. ffmpeg writes mixed.mp3 back into
+  // the same directory it is reading the PCM from, so an exhausted scratch dir
+  // fails here — and that failure is otherwise indistinguishable from a
+  // container kill once the logs are gone.
+  // Flattened: chunk rotation gives each speaker several PCM files, and every
+  // one of them is an ffmpeg input.
+  await logScratchUsageBeforeMix(recordingId, tempDir, Array.from(speakerFiles.values()).flat(), logger)
 
   // 1. Mix per-speaker PCM into MP3.
   const args = buildFfmpegArgs(speakerFiles, outputPath)
