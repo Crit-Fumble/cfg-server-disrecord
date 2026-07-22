@@ -49,10 +49,28 @@ function italic(text: string): string {
   return `*${text}*`
 }
 
+/** Join two caption fragments with a single space, tolerating an empty left side. */
+function joinCaption(left: string, right: string): string {
+  return left ? `${left} ${right}` : right
+}
+
 /** Hard-truncate to Discord's per-message char cap. Trailing ellipsis when cut. */
 function truncateForDiscord(content: string): string {
   if (content.length <= DISCORD_MESSAGE_MAX_CHARS) return content
   return content.slice(0, DISCORD_MESSAGE_MAX_CHARS - 1) + '…'
+}
+
+/**
+ * A speaker's in-progress thread paragraph — one Discord message that
+ * consecutive finals accumulate into.
+ */
+interface OpenParagraph {
+  /** The Discord message backing this paragraph. */
+  messageId: string
+  /** Finalized text committed so far. Excludes any italic interim tail. */
+  committed: string
+  /** Last time this paragraph was posted to or edited, for the silence gap. */
+  lastActivityAt: number
 }
 
 export type SessionStatus = 'starting' | 'recording' | 'paused' | 'stopping' | 'stopped' | 'failed'
@@ -187,13 +205,27 @@ export class SessionController {
    * Per-speaker webhook caption state. Each speaker posts via their own
    * webhook (their name + avatar appear as the chat author), so Discord
    * auto-groups consecutive messages from the same speaker under a single
-   * header. One in-flight utterance per speaker: first interim POSTs an
-   * italic message via the webhook, subsequent interims EDIT it (throttled),
-   * the final EDITs one last time to non-italic + clears the slot so the
-   * speaker's next utterance posts a fresh message.
+   * header.
+   *
+   * A speaker holds one OPEN PARAGRAPH: a single message that consecutive
+   * finals are appended into by editing, rather than one message per final.
+   * Interims render as the committed text plus an italic tail on that same
+   * message, so a reader watches the line refine itself and then settle into
+   * the paragraph.
+   *
+   * Previously the slot was cleared on every final, so a monologue split into
+   * 30 finals became 30 messages — past Discord's ~5-per-5s ceiling, where
+   * 429s silently drop lines (#11).
    */
   private webhookManager: SpeakerWebhookManager | null = null
-  private interimMessageIds = new Map<string, string>()
+  private openParagraphs = new Map<string, OpenParagraph>()
+  /**
+   * Id of the most recent message WE posted to the thread, across all
+   * speakers. A paragraph may only be appended to while it is still the last
+   * message — otherwise the appended text renders above newer messages, out
+   * of order.
+   */
+  private lastPostedMessageId: string | null = null
   /** Per-speaker throttle so we don't spam Discord edits on every interim. */
   private interimLastEditAt = new Map<string, number>()
   /** Last interim text per speaker — avoids edits when nothing actually changed. */
@@ -207,6 +239,17 @@ export class SessionController {
   private speakerOpQueue = new Map<string, Promise<void>>()
   /** Minimum gap between consecutive edits per speaker (ms). Stays under Discord's 5/5s edit limit. */
   private readonly INTERIM_EDIT_THROTTLE_MS = 800
+  /**
+   * Silence after which the next utterance starts a new paragraph. A genuine
+   * pause is a natural break and keeps a multi-hour transcript readable; well
+   * above `utteranceEndMs` so ordinary between-sentence gaps keep accumulating.
+   */
+  private readonly PARAGRAPH_GAP_MS = 15_000
+  /**
+   * Close a paragraph before it reaches Discord's 2000-char cap, so appending
+   * never truncates mid-paragraph.
+   */
+  private readonly PARAGRAPH_MAX_CHARS = 1900
 
   constructor(params: SessionControllerParams) {
     this.params = params
@@ -932,7 +975,7 @@ export class SessionController {
 
     // Throttle + dedup synchronously, BEFORE enqueueing the op, so a chatty
     // Deepgram stream doesn't fill the queue with no-op edits.
-    const existing = this.interimMessageIds.get(event.speakerId)
+    const existing = this.openParagraphs.get(event.speakerId)
     if (existing) {
       const last = this.interimLastEditAt.get(event.speakerId) ?? 0
       if (Date.now() - last < this.INTERIM_EDIT_THROTTLE_MS) return
@@ -942,14 +985,53 @@ export class SessionController {
     this.interimLastText.set(event.speakerId, text)
 
     this.enqueueSpeakerOp(event.speakerId, async () => {
-      const messageId = this.interimMessageIds.get(event.speakerId)
-      if (messageId) {
-        await this.editCaption(event.speakerId, messageId, italic(text))
-      } else {
-        const newId = await this.postCaption(event.speakerId, event.speakerName, italic(text))
-        if (newId) this.interimMessageIds.set(event.speakerId, newId)
+      const para = this.openParagraphs.get(event.speakerId)
+      // Render the in-flight words as an italic tail on the open paragraph so
+      // the reader sees them land in context rather than in a message of
+      // their own.
+      if (para && this.canContinueParagraph(para, text)) {
+        para.lastActivityAt = Date.now()
+        await this.editCaption(event.speakerId, para.messageId, joinCaption(para.committed, italic(text)))
+        return
       }
+      await this.openParagraphWith(event.speakerId, event.speakerName, italic(text), '')
     })
+  }
+
+  /**
+   * True while a paragraph may still absorb `addition`: it is still the last
+   * message in the thread, the speaker has not gone quiet, and it has room.
+   */
+  private canContinueParagraph(para: OpenParagraph, addition: string): boolean {
+    if (para.messageId !== this.lastPostedMessageId) return false
+    if (Date.now() - para.lastActivityAt > this.PARAGRAPH_GAP_MS) return false
+    return joinCaption(para.committed, addition).length <= this.PARAGRAPH_MAX_CHARS
+  }
+
+  /**
+   * Post a fresh message and make it the speaker's open paragraph. `committed`
+   * is what the paragraph should remember as finalized — empty for an interim,
+   * whose words are not yet final.
+   */
+  private async openParagraphWith(
+    speakerId: string,
+    speakerName: string,
+    content: string,
+    committed: string,
+  ): Promise<void> {
+    const newId = await this.postCaption(speakerId, speakerName, content)
+    if (!newId) {
+      // Post failed — drop the paragraph rather than keep editing a message
+      // that may not exist.
+      this.openParagraphs.delete(speakerId)
+      return
+    }
+    this.openParagraphs.set(speakerId, {
+      messageId: newId,
+      committed,
+      lastActivityAt: Date.now(),
+    })
+    this.lastPostedMessageId = newId
   }
 
   /**
@@ -974,15 +1056,17 @@ export class SessionController {
     if (!text) return
 
     this.enqueueSpeakerOp(event.speakerId, async () => {
-      const interimId = this.interimMessageIds.get(event.speakerId)
-      this.interimMessageIds.delete(event.speakerId)
       this.interimLastEditAt.delete(event.speakerId)
       this.interimLastText.delete(event.speakerId)
-      if (interimId) {
-        await this.editCaption(event.speakerId, interimId, text)
-      } else {
-        await this.postCaption(event.speakerId, event.speakerName, text)
+
+      const para = this.openParagraphs.get(event.speakerId)
+      if (para && this.canContinueParagraph(para, text)) {
+        para.committed = joinCaption(para.committed, text)
+        para.lastActivityAt = Date.now()
+        await this.editCaption(event.speakerId, para.messageId, para.committed)
+        return
       }
+      await this.openParagraphWith(event.speakerId, event.speakerName, text, text)
     })
   }
 
