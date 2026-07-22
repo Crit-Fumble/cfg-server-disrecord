@@ -25,7 +25,10 @@ function controlBase(): { url: string; token?: string } {
 async function controlFetch(path: string, init: RequestInit = {}): Promise<Response> {
   const { url, token } = controlBase()
   const headers = new Headers(init.headers)
-  headers.set('content-type', 'application/json')
+  // Only declare a JSON body when one is actually sent. Fastify rejects a
+  // request that advertises `application/json` and then sends nothing, which
+  // 400'd every bodyless POST (`stop`) before the route could run.
+  if (init.body !== undefined) headers.set('content-type', 'application/json')
   if (token) headers.set('authorization', `Bearer ${token}`)
   return fetch(`${url}${path}`, { ...init, headers })
 }
@@ -82,7 +85,9 @@ async function cmdStop(id?: string): Promise<void> {
     process.exitCode = 1
     return
   }
-  logger.info({ recordingId: id }, 'stop accepted — post-processing async')
+  // The stop route blocks until mix + upload + Discord post + cleanup finish,
+  // so a 200 here means delivery is done — not merely accepted.
+  logger.info({ recordingId: id }, 'stop complete — delivery finished')
 }
 
 export async function runCli(argv: string[]): Promise<void> {
