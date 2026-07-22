@@ -1,4 +1,28 @@
-/** @type {import('jest').Config} */
+/**
+ * NOTE ON `--forceExit` (in the `test` script, not here):
+ *
+ * `@snazzah/davey` — the DAVE voice-E2EE native addon pulled in transitively by
+ * `@discordjs/voice` — registers a `CustomGC` handle on load that keeps the Node
+ * process alive after the suite finishes. Jest reports it under
+ * `--detectOpenHandles` as:
+ *
+ *     ●  CustomGC
+ *          at requireNative (node_modules/@snazzah/davey/index.js:184:25)
+ *
+ * Locally the runner still exits; in CI, with no TTY, the job HUNG — two runs
+ * sat at 45m and 2h30m, and because they never concluded they never reported
+ * failure, so CI was gating nothing at all (disrecord#13).
+ *
+ * The handle is inside a third-party native module we do not control and cannot
+ * unref, and the voice stack is loaded transitively by code under test, so
+ * mocking it away would mean mocking most of the recording path. `--forceExit`
+ * is the same lever cfg-core-server already pulls for this class of problem.
+ *
+ * The job also carries `timeout-minutes: 10` so a DIFFERENT future hang fails
+ * fast and loudly instead of silently burning runner hours.
+ *
+ * @type {import('jest').Config}
+ */
 module.exports = {
   testEnvironment: 'node',
   testMatch: [

@@ -8,6 +8,11 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
+    # A hang here used to run to GitHub's 6h default. Two observed runs sat at
+    # 45m and 2h30m on `npm test` before anyone noticed, and because the job
+    # never CONCLUDED it never reported failure — CI was gating nothing. Fail
+    # fast instead; the suite takes well under a minute.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

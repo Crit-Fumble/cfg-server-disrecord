@@ -46,10 +46,28 @@ describe('padSilenceAndAppend', () => {
   })
 
   it('keeps each speaker on an independent byte counter', () => {
-    const state = createSilencePadState()
-    padSilenceAndAppend(state, 'a', Buffer.alloc(100))
-    padSilenceAndAppend(state, 'b', Buffer.alloc(200))
-    expect(state.bytesWritten.get('a')).toBe(100)
-    expect(state.bytesWritten.get('b')).toBe(200)
+    // Time MUST be frozen here. Padding is wall-clock driven: the first call
+    // anchors `sessionStartedAtMs`, and every later call pads to
+    // `floor(elapsedMs * PCM_BYTES_PER_MS)`. PCM_BYTES_PER_MS is 96, so a
+    // single millisecond between these two calls gives 'b' 96 bytes of leading
+    // silence and the exact assertion below fails.
+    //
+    // That is not hypothetical — this test failed exactly once under full-suite
+    // parallelism (disrecord#13) and passed on every serial re-run, which is
+    // precisely the signature of a 1ms scheduling gap. Reproduced deliberately
+    // with a 2ms busy-wait: expected 200, received 392 (= 200 + 2 × 96).
+    jest.useFakeTimers().setSystemTime(new Date('2026-07-22T00:00:00Z'))
+    try {
+      const state = createSilencePadState()
+      padSilenceAndAppend(state, 'a', Buffer.alloc(100))
+      padSilenceAndAppend(state, 'b', Buffer.alloc(200))
+      // With elapsed pinned at 0 no silence is inserted, so these are the raw
+      // frame lengths — which is the property under test: per-speaker counters
+      // are independent, not that padding happens to be zero.
+      expect(state.bytesWritten.get('a')).toBe(100)
+      expect(state.bytesWritten.get('b')).toBe(200)
+    } finally {
+      jest.useRealTimers()
+    }
   })
 })

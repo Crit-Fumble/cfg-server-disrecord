@@ -3,7 +3,7 @@
   "version": "0.2.8",
   "private": true,
   "type": "module",
-  "description": "Crit-Fumble DisRecord — self-contained Discord voice recording container. Boots its own bot, captures voice, mixes mp3, and transcribes. Runs local-only or CFG-hosted (phones home to cfg-core-server for billing/object-storage/consent).",
+  "description": "Crit-Fumble DisRecord \u2014 self-contained Discord voice recording container. Boots its own bot, captures voice, mixes mp3, and transcribes. Runs local-only or CFG-hosted (phones home to cfg-core-server for billing/object-storage/consent).",
   "license": "AGPL-3.0-only",
   "repository": {
     "type": "git",
@@ -20,7 +20,7 @@
     "start": "node dist/index.js serve",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
-    "test": "jest --config jest.config.cjs",
+    "test": "jest --config jest.config.cjs --forceExit",
     "test:unit": "jest --config jest.config.cjs --testPathPatterns=tests/unit",
     "test:integration": "jest --config jest.config.cjs --testPathPatterns=tests/integration",
     "prepare": "husky"
