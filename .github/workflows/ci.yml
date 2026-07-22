@@ -10,9 +10,13 @@ jobs:
     runs-on: ubuntu-24.04
     # A hang here used to run to GitHub's 6h default. Two observed runs sat at
     # 45m and 2h30m on `npm test` before anyone noticed, and because the job
-    # never CONCLUDED it never reported failure — CI was gating nothing. Fail
-    # fast instead; the suite takes well under a minute.
-    timeout-minutes: 10
+    # never CONCLUDED it never reported failure — CI was gating nothing.
+    #
+    # 25, not 10: `npm ci` alone takes ~11 minutes on this runner because
+    # @discordjs/opus and @snazzah/davey compile from source. A 10-minute cap
+    # would kill healthy runs during install, which is a worse failure than the
+    # one it guards. The suite itself runs in about a second.
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5

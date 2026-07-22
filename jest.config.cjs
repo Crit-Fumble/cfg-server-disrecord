@@ -15,8 +15,17 @@
  *
  * The handle is inside a third-party native module we do not control and cannot
  * unref, and the voice stack is loaded transitively by code under test, so
- * mocking it away would mean mocking most of the recording path. `--forceExit`
- * is the same lever cfg-core-server already pulls for this class of problem.
+ * mocking it away would mean mocking most of the recording path.
+ *
+ * `--forceExit` ALONE WAS NOT ENOUGH — verified in CI, not assumed. The run
+ * still hung: every suite reported PASS, then nine minutes of silence with no
+ * jest summary line, ending in `Terminate orphan process (npm test)`. Jest was
+ * blocked waiting on a WORKER child that would not exit, which happens before
+ * results are reported and therefore before `--forceExit` can act.
+ *
+ * Hence `--runInBand` too: with no worker children there is nothing to wait on,
+ * and the force-exit fires in-process. The suite's real runtime is about a
+ * second, so serial execution costs nothing here.
  *
  * The job also carries `timeout-minutes: 10` so a DIFFERENT future hang fails
  * fast and loudly instead of silently burning runner hours.
