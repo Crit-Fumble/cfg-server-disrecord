@@ -531,7 +531,19 @@ export class SessionController {
     })
   }
 
+  /**
+   * Apply a consent update pushed over the control API.
+   *
+   * Drives the ConsentManager directly. Routing this solely through
+   * `consentSync` made the endpoint a silent no-op in self-host mode, where
+   * that bridge is never constructed: the push returned 204, the capture gate
+   * never opened, and the session recorded zero bytes with no error (#7).
+   * Both apply methods are idempotent, so the CFG-hosted bridge below can
+   * safely re-apply the same update on its way to core-server bookkeeping.
+   */
   pushConsent(userId: string, consented: boolean): void {
+    if (consented) this.consent.applyConsent(userId)
+    else this.consent.applyDecline(userId)
     this.consentSync?.applyPushedUpdate(userId, consented)
   }
 
