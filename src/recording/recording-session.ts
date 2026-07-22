@@ -32,17 +32,45 @@ export const OPUS_SAMPLE_RATE = 48_000
  * unaffected.
  */
 export const DEEPGRAM_STREAM_TUNING = {
-  utteranceEndMs: 1500,
+  /**
+   * Wall-clock silence (ms) before we force a Deepgram `Finalize`, AND the
+   * value sent as `utterance_end_ms`.
+   *
+   * This is the DOMINANT segment-length control, not `endpointing` below.
+   * Discord only sends frames while someone is speaking, so when a speaker
+   * stops there is no trailing silence in the stream at all — Deepgram cannot
+   * endpoint on something it never receives, and the timer in onSpeakerEnd is
+   * what actually closes the segment.
+   *
+   * Raised 1500 → 3000 (2026-07-22, owner request: trade latency for accuracy
+   * until transcription moves in-house). At 1500 a speaker who pauses ~2s
+   * between sentences got a forced finalize at EVERY sentence break, which
+   * caused both reported problems at once:
+   *
+   *   - short segments starve the model of context, so context-resolvable
+   *     phrases degrade ("Encourage" heard as "In College") — see #10
+   *   - one message per final, so a slow monologue posted dozens of thread
+   *     messages per minute — see #11
+   *
+   * 3000ms merges sentences separated by a normal speaking pause into one
+   * segment. Cost: a final lands up to 1.5s later than before. The interim
+   * caption already shows live text, so perceived latency barely moves —
+   * latency was never the complaint, accuracy was.
+   */
+  utteranceEndMs: 3000,
   /**
    * Trailing-silence threshold (ms) before Deepgram emits the final
-   * transcript for a speech segment. Higher = more chance for soft
-   * trailing words to register before the segment closes; too high
-   * delays final delivery. 1000ms is a good compromise — earlier 500ms
-   * was clipping the last 1–2 words off sentences that trailed off
-   * softly. Stay under utteranceEndMs so the UtteranceEnd message
-   * still fires after the final.
+   * transcript for a speech segment. Only bites for pauses WITHIN a speaking
+   * burst (Discord's speaking hangover keeps frames flowing briefly); the
+   * end-of-utterance case is handled by the forced Finalize above.
+   *
+   * Earlier 500ms clipped the last 1–2 words off sentences that trailed off
+   * softly; 1000 fixed that. Raised to 2000 alongside utteranceEndMs so
+   * mid-sentence thinking pauses no longer split a thought in half. Must stay
+   * UNDER utteranceEndMs so the UtteranceEnd message still fires after the
+   * final.
    */
-  endpointing: 1000,
+  endpointing: 2000,
   /** Deepgram per-frame speech-detection telemetry; not consumed yet. */
   vadEvents: true,
 } as const
