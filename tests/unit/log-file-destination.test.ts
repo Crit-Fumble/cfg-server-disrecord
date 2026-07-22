@@ -15,7 +15,7 @@ const ENV_KEYS = [
   'OUTPUT_DIR',
   'DISRECORD_LOG_TO_FILE',
   'DISRECORD_LOG_FILE_MAX_BYTES',
-  'CFG_INSTALLATION_ID',
+  'DISRECORD_INSTALLATION_ID',
 ]
 
 describe('openLogFileDestination', () => {
@@ -51,7 +51,7 @@ describe('openLogFileDestination', () => {
   // Underscore prefix keeps it from ever colliding with a recordingId dir the
   // output sink writes alongside it.
   it('names the file by installation and boot so a restart cannot overwrite it', () => {
-    process.env.CFG_INSTALLATION_ID = 'inst-42'
+    process.env.DISRECORD_INSTALLATION_ID = 'inst-42'
 
     const a = openLogFileDestination()
     const b = openLogFileDestination()

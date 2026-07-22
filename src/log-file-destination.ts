@@ -86,7 +86,7 @@ export function openLogFileDestination(): LogFileDestination | null {
   // adopted must not overwrite the log that explains why it restarted. The
   // pid + counter suffix keeps two boots inside the same millisecond distinct.
   const bootId = new Date().toISOString().replace(/[:.]/g, '-')
-  const installationId = process.env.CFG_INSTALLATION_ID ?? 'standalone'
+  const installationId = process.env.DISRECORD_INSTALLATION_ID ?? 'standalone'
   const path = join(dir, `worker-${installationId}-${bootId}-${process.pid}-${++openCount}.log`)
 
   try {
