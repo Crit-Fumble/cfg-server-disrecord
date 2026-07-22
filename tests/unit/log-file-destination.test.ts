@@ -6,7 +6,7 @@
  * fails. It exists because AutoRemove takes the container's logs with it
  * (cfg-core-server#205).
  */
-import { mkdtemp, rm, readdir, readFile, stat } from 'node:fs/promises'
+import { mkdtemp, rm, readdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openLogFileDestination } from '../../src/log-file-destination.js'
@@ -76,8 +76,22 @@ describe('openLogFileDestination', () => {
 
   // The worker must survive an unwritable volume — stdout-only is a fine
   // degraded mode; a crash is not.
-  it('returns null rather than throwing when the volume is unwritable', () => {
-    process.env.OUTPUT_DIR = '/proc/nonexistent-cannot-create'
+  it('returns null rather than throwing when the volume is unwritable', async () => {
+    // Point OUTPUT_DIR at a path UNDER a regular file. `mkdirSync` there fails
+    // with ENOTDIR synchronously on every platform.
+    //
+    // This used to be '/proc/nonexistent-cannot-create'. That relied on /proc
+    // being unwritable — but /proc only exists on Linux, and there `mkdirSync`
+    // on it does not fail fast, it BLOCKS THE EVENT LOOP. On the Linux CI runner
+    // that hung the entire jest process forever: every suite reported PASS, then
+    // no summary and no exit, so the job never concluded and CI silently gated
+    // nothing (disrecord#13). macOS has no /proc, took a different branch, and
+    // passed — which is why this could only be reproduced in a linux/amd64
+    // container, never locally. A file-as-parent path is unwritable identically
+    // everywhere and removes the platform split.
+    const filePath = join(dir, 'not-a-directory')
+    await writeFile(filePath, 'x')
+    process.env.OUTPUT_DIR = join(filePath, 'sub')
 
     expect(() => openLogFileDestination()).not.toThrow()
     expect(openLogFileDestination()).toBeNull()

@@ -20,7 +20,7 @@
     "start": "node dist/index.js serve",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist",
-    "test": "jest --config jest.config.cjs --runInBand --forceExit",
+    "test": "jest --config jest.config.cjs",
     "test:unit": "jest --config jest.config.cjs --testPathPatterns=tests/unit",
     "test:integration": "jest --config jest.config.cjs --testPathPatterns=tests/integration",
     "prepare": "husky"
