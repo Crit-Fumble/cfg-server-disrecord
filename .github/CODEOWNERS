@@ -1,0 +1,4 @@
+# Auto-requests the repo owner's review on every pull request.
+# Not a hard gate on its own — the branch-protection review requirement is
+# what blocks merge; this just makes sure the review lands in the owner's queue.
+* @HobDaytrain
