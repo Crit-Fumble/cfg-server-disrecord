@@ -273,6 +273,9 @@ export class SessionController {
       buttonKey: p.cfg?.installationId ?? this.recordingId,
       client: p.client,
       textChannelId: p.textChannelId,
+      // Split-channel sessions mirror consent prompts into the voice
+      // channel's chat with a link to the thread (dr#4).
+      voiceChannelId: p.voiceChannelId,
       // threadId is wired below via setThreadId once createRecordingThread
       // resolves — consent prompts then target the thread (with the user
       // added on demand) and fall back to textChannelId on any failure.

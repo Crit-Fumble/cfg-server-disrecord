@@ -57,6 +57,16 @@ export interface ConsentManagerParams {
    * announcement — inside the same thread.
    */
   threadId?: string | null
+  /**
+   * The voice channel being recorded. When set AND it differs from
+   * `textChannelId` (a split-channel session), every consent prompt is
+   * mirrored into the voice channel's own chat with a link over to the
+   * recording thread — a late joiner is looking at the voice channel, not
+   * at whatever channel hosts the transcript (dr#4). Same buttons, so they
+   * can decide right where they are. Single-channel sessions and self-host
+   * callers that don't wire this keep the single-prompt flow.
+   */
+  voiceChannelId?: string | null
   /** User IDs pre-consented at start (e.g. the invoker). */
   initialConsented?: Iterable<string>
   logger: Logger
@@ -67,6 +77,7 @@ export class ConsentManager {
   private readonly buttonKey: string
   private readonly client: Client
   private readonly textChannelId: string
+  private readonly voiceChannelId: string | null
   private threadId: string | null
   private readonly logger: Logger
 
@@ -107,6 +118,7 @@ export class ConsentManager {
     this.client = params.client
     this.textChannelId = params.textChannelId
     this.threadId = params.threadId ?? null
+    this.voiceChannelId = params.voiceChannelId ?? null
     this.logger = params.logger
     for (const id of params.initialConsented ?? []) {
       this.consented.add(id)
@@ -371,6 +383,27 @@ export class ConsentManager {
         this.pending.delete(userId)
         this.declined.add(userId)
         return
+      }
+    }
+
+    // Split-channel mirror (dr#4): the primary prompt lives with the
+    // transcript (thread / parent text channel), but a late joiner is
+    // looking at the VOICE channel. Mirror the prompt there with a link
+    // over to the thread. Best-effort — a mirror failure never changes
+    // consent state; the primary prompt (or its own failure handling
+    // above) already decided that.
+    if (this.voiceChannelId && this.voiceChannelId !== this.textChannelId) {
+      const destination = this.threadId ?? this.textChannelId
+      const voiceContent =
+        `<@${userId}> 🎙 A session recording is in progress in this channel.\n` +
+        `Live transcript + details: <#${destination}> — you can answer here or there.`
+      try {
+        await this.sendTo(this.voiceChannelId, voiceContent, components)
+      } catch (err) {
+        this.logger.warn(
+          { err, userId, voiceChannelId: this.voiceChannelId, recordingId: this.recordingId },
+          'voice-channel consent mirror failed — primary prompt already posted',
+        )
       }
     }
 
