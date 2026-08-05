@@ -22,6 +22,7 @@
 
 import Fastify, { type FastifyInstance } from 'fastify'
 import { GuildConflictError, SessionNotFoundError } from '../recording/recording-service.js'
+import { assertDashboardBindIsSafe, registerDashboard } from './dashboard.js'
 import type { RecordingService } from '../recording/recording-service.js'
 import type { ControlAuthResult } from './auth.js'
 import type { Logger } from '../logger.js'
@@ -39,6 +40,18 @@ export interface ControlServerParams {
    * core-server can reach the published port).
    */
   host: string
+  /**
+   * Serve the built-in self-host dashboard at `/` (#9). Self-host ONLY —
+   * CFG-hosted must leave it off: core-server owns that surface, and the
+   * container isn't reachable from a browser there anyway.
+   */
+  dashboard?: boolean
+  /**
+   * Static control token, when one is configured. Only used to check that a
+   * dashboard is never served unauthenticated off a non-loopback bind — the
+   * request-level check lives in `authenticate`.
+   */
+  controlToken?: string
   logger: Logger
 }
 
@@ -64,6 +77,10 @@ interface ConsentBody {
 export async function startControlServer(params: ControlServerParams): Promise<FastifyInstance> {
   const { service, port, authenticate, host, logger } = params
   const app = Fastify({ logger: false })
+
+  // Fail at boot rather than serving an open recording surface. No-op unless
+  // the dashboard is on — see assertDashboardBindIsSafe.
+  if (params.dashboard) assertDashboardBindIsSafe(host, params.controlToken)
 
   // Auth — applied to every /v1/* route. `/healthz` stays open so core-server
   // (and Docker healthchecks) can poll readiness before they hold a token.
@@ -202,6 +219,13 @@ export async function startControlServer(params: ControlServerParams): Promise<F
     }
     return reply.send({ recordingId: id, ...result })
   })
+
+  // Self-host dashboard (#9) — registered last, and only when enabled, so the
+  // CFG-hosted container has no such route at all rather than a hidden one.
+  if (params.dashboard) {
+    registerDashboard(app, service)
+    logger.info({ url: `http://${host}:${port}/` }, 'self-host dashboard enabled')
+  }
 
   await app.listen({ host, port })
   logger.info({ host, port }, 'control server listening')

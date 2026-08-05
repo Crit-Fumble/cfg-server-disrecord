@@ -66,6 +66,11 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
     port: config.controlPort,
     host: cfgHosted ? '0.0.0.0' : '127.0.0.1',
     authenticate: createControlAuthenticator({ cfg: config.cfg, controlToken: config.controlToken }),
+    // Self-host gets the built-in dashboard (#9) so a solo operator can drive
+    // the container without first building a frontend. CFG-hosted never does —
+    // core-server owns that surface.
+    dashboard: !cfgHosted,
+    controlToken: config.controlToken,
     logger: rootLogger.child({ module: 'control' }),
   })
 

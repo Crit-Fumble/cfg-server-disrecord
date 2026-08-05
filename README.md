@@ -56,12 +56,29 @@ You need a Discord bot and (optionally) a Deepgram API key.
      cfg-server-disrecord:local serve
    ```
 
-5. **Record.** Drive the container over the HTTP control API (or the bundled
-   CLI). `POST /v1/recordings` joins the voice channel, posts the in-Discord
+5. **Record.** Open <http://127.0.0.1:8080/> for the built-in dashboard, or
+   drive the container over the HTTP control API (or the bundled CLI).
+   `POST /v1/recordings` joins the voice channel, posts the in-Discord
    consent prompt, and begins capture. When you stop, the container mixes the
    MP3, generates a VTT caption track (when transcription is on), posts them
    into a thread, and writes a copy to `OUTPUT_DIR/<recordingId>/`. Want a
    `/resesh`-style slash UX? Build a bot that issues these control calls.
+
+### Built-in dashboard (self-host only)
+
+Self-host serves a single-page control panel at `/` — pick a server and voice
+channel, start/pause/stop a recording, watch what is live, and grant or revoke
+consent for a user. It exists so recording one session does not first require
+writing an HTTP client.
+
+It is deliberately minimal, and stays that way: accounts, billing, campaigns
+and transcript browsing belong to core-server, not here. It is **not** served
+when CFG-hosted — core-server owns that surface, and the container isn't
+reachable from a browser there anyway.
+
+It inherits the control server's `127.0.0.1` bind. Since "no `CONTROL_TOKEN` ⇒
+every request allowed" is only safe on loopback, the container **refuses to
+boot** if the dashboard would be served on a wider bind without a token.
 
 ### HTTP control API
 
@@ -77,6 +94,8 @@ POST /v1/recordings/:id/resume → 204
 POST /v1/recordings/:id/stop   → 202   (post-processing async)
 GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused }
 GET  /v1/recordings            → [ ... ]
+GET  /v1/guilds                → { guilds: [ { id, name, voiceChannels, textChannels } ] }   (self-host)
+GET  /v1/diagnostics           → { botReady, botTag, guildCount, intents, activeRecordings } (self-host)
 GET  /healthz                  → { ok, botReady, activeRecordings }
 ```
 
