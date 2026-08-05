@@ -197,6 +197,59 @@ export class RecordingService {
     return controller.sweepWebhooks()
   }
 
+  /**
+   * Guilds this bot is in, with their voice + text channels — what the
+   * self-host dashboard populates its pickers from (#9). Reads the gateway
+   * cache only, so it is cheap enough for a polling UI.
+   */
+  listGuilds(): Array<{
+    id: string
+    name: string
+    voiceChannels: Array<{ id: string; name: string }>
+    textChannels: Array<{ id: string; name: string }>
+  }> {
+    const byName = (a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)
+    return this.client.guilds.cache.map((guild) => {
+      const voiceChannels: Array<{ id: string; name: string }> = []
+      const textChannels: Array<{ id: string; name: string }> = []
+      for (const channel of guild.channels.cache.values()) {
+        const entry = { id: channel.id, name: channel.name }
+        if (channel.isVoiceBased()) voiceChannels.push(entry)
+        else if (channel.isTextBased()) textChannels.push(entry)
+      }
+      return {
+        id: guild.id,
+        name: guild.name,
+        voiceChannels: voiceChannels.sort(byName),
+        textChannels: textChannels.sort(byName),
+      }
+    })
+  }
+
+  /**
+   * Boot-state summary for the dashboard (#9). `intents` is what the gateway
+   * client was CONFIGURED with — note that Discord refuses the connection
+   * outright when a privileged intent is requested but not enabled in the
+   * Developer Portal, so a ready bot has necessarily been granted everything
+   * listed here. That failure shows up as the container not booting, which is
+   * what the dashboard's diagnostics text explains.
+   */
+  diagnostics(): {
+    botReady: boolean
+    botTag: string | null
+    guildCount: number
+    intents: string[]
+    activeRecordings: number
+  } {
+    return {
+      botReady: this.botReady,
+      botTag: this.client.user?.tag ?? null,
+      guildCount: this.client.guilds.cache.size,
+      intents: this.client.options.intents.toArray(),
+      activeRecordings: this.activeCount,
+    }
+  }
+
   /** Stop every active recording — used on container shutdown. */
   async stopAll(): Promise<void> {
     const all = this.registry.list()
