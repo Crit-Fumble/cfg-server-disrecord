@@ -78,17 +78,47 @@ jobs:
       # A tag can be pushed to any commit, including one CI never saw. CI runs
       # on push to main/next and on PRs — never on tags — so without this a
       # release could publish an untested build straight to `:latest`.
+      #
+      # ⚠️ IT MUST WAIT, not just look. The promotion push to `main` and the tag
+      # push land within seconds of each other, so this job routinely starts
+      # BEFORE CI has registered a check-run for the commit. The first version
+      # of this step read the API once and treated "not reported yet" as
+      # "untested" — which failed the v0.2.22 release against a commit whose
+      # CI then passed twice. Same trap dev-tools' promote.sh documents:
+      # "queued" and "expected" both mean wait, and neither says how long.
+      #
+      # `conclusion` is null while a run is queued or in progress, so absence
+      # and in-flight are the same signal here: keep waiting. Only a RESOLVED
+      # non-success is fatal.
       - name: CI passed for this commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          CONCLUSION=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
-            --jq '[.check_runs[] | select(.name == "test")] | first | .conclusion // "missing"')
-          if [ "$CONCLUSION" != "success" ]; then
-            echo "::error::CI 'test' for $GITHUB_SHA is '$CONCLUSION', not success. Nothing untested reaches :latest."
-            exit 1
-          fi
-          echo "CI test check is green for $GITHUB_SHA"
+          DEADLINE=$(( $(date +%s) + 900 ))
+          while :; do
+            RUNS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+              --jq '[.check_runs[] | select(.name == "test")]')
+
+            if [ "$(echo "$RUNS" | jq 'any(.[]; .conclusion == "success")')" = "true" ]; then
+              echo "CI test check is green for $GITHUB_SHA"
+              exit 0
+            fi
+
+            # A resolved non-success with nothing green is a real failure —
+            # fail now rather than burning the whole timeout.
+            BAD=$(echo "$RUNS" | jq -r '[.[] | select(.conclusion != null and .conclusion != "success") | .conclusion] | join(", ")')
+            if [ -n "$BAD" ]; then
+              echo "::error::CI 'test' for $GITHUB_SHA concluded: $BAD. Nothing untested reaches :latest."
+              exit 1
+            fi
+
+            if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+              echo "::error::timed out after 15m waiting for CI 'test' on $GITHUB_SHA. Was the commit ever pushed to main or next?"
+              exit 1
+            fi
+            echo "waiting for CI 'test' on ${GITHUB_SHA:0:8} (queued or not yet reported)…"
+            sleep 20
+          done
 
   build:
     needs: verify
