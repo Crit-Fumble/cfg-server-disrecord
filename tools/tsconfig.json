@@ -1,0 +1,12 @@
+{
+  // Dev tooling is typechecked but deliberately NOT part of the build: it
+  // stays out of `dist`, so a harness that can open a Deepgram socket and read
+  // per-speaker audio off disk never ships inside the production image.
+  // `npm run typecheck` covers both projects.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true
+  },
+  "include": ["**/*.ts", "../src/**/*"]
+}

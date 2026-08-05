@@ -98,4 +98,27 @@ describe('resolveStandaloneConfig', () => {
       expect(resolveStandaloneConfig().cfg).toBeUndefined()
     })
   })
+
+  // Per-speaker audio is the most sensitive artifact the container holds, so
+  // retention must be impossible to enable by accident (#12).
+  describe('DISRECORD_KEEP_PCM', () => {
+    it('is off unless explicitly set', () => {
+      setEnv(BASE_ENV)
+      expect(resolveStandaloneConfig().keepPcm).toBe(false)
+    })
+
+    it('accepts an explicit opt-in', () => {
+      setEnv({ ...BASE_ENV, DISRECORD_KEEP_PCM: '1' })
+      expect(resolveStandaloneConfig().keepPcm).toBe(true)
+      setEnv({ ...BASE_ENV, DISRECORD_KEEP_PCM: 'true' })
+      expect(resolveStandaloneConfig().keepPcm).toBe(true)
+    })
+
+    it('stays off for anything else — including values that merely look set', () => {
+      for (const value of ['0', 'false', '', 'yes', 'no', 'off']) {
+        setEnv({ ...BASE_ENV, DISRECORD_KEEP_PCM: value })
+        expect(resolveStandaloneConfig().keepPcm).toBe(false)
+      }
+    })
+  })
 })

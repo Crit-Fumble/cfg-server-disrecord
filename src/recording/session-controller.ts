@@ -14,9 +14,9 @@
  *   stop()   → leave voice → finalize PCM → mix → VTT → sink → post thread
  */
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { ActivityType, type Client } from 'discord.js'
 import { VoiceCapture } from '../gateway/voice-capture.js'
 import { PcmCapture } from './pcm-capture.js'
@@ -97,6 +97,12 @@ export interface SessionControllerParams {
   chunkMinutes: number
   /** Output sink for the finalized mp3 + VTT. */
   sink: OutputSink
+  /**
+   * When set, per-speaker PCM is copied here before the temp dir is removed,
+   * instead of being deleted with it. Resolved from `DISRECORD_KEEP_PCM` —
+   * absent unless the operator explicitly opted in (#12).
+   */
+  keepPcmDir?: string
   /** Discord user id of the invoker — pre-consented. */
   invokerUserId?: string
   /**
@@ -795,6 +801,12 @@ export class SessionController {
       this.status = 'failed'
       this.logger.error({ err, recordingId: rid }, '[runStop] post-processing or delivery FAILED')
     } finally {
+      // Opt-in per-speaker audio retention (#12) — must run BEFORE the temp
+      // dir goes away. Best-effort: a failed copy is a lost tuning sample,
+      // never a failed recording.
+      await this.preservePcm().catch((err) =>
+        this.logger.warn({ err, recordingId: rid }, 'PCM retention failed (best-effort)'),
+      )
       await rm(this.tempDir, { recursive: true, force: true }).catch(() => {})
       this.logger.info({ recordingId: rid }, '[runStop] 7/9 temp dir cleaned')
 
@@ -819,6 +831,36 @@ export class SessionController {
         '[runStop] 9/9 recording session stopped',
       )
     }
+  }
+
+  /**
+   * Copy this session's per-speaker PCM out of the temp dir so it survives
+   * cleanup. No-op unless the operator set `DISRECORD_KEEP_PCM` (#12).
+   *
+   * The retained audio is the raw, un-mixed voice of each consenting speaker
+   * — the most sensitive artifact the container ever holds — so every session
+   * that keeps it says so at WARN, with the destination, rather than leaving
+   * it to be discovered on disk later.
+   */
+  private async preservePcm(): Promise<void> {
+    const dir = this.params.keepPcmDir
+    if (!dir) return
+
+    const destDir = join(dir, 'pcm', this.recordingId)
+    await mkdir(destDir, { recursive: true })
+
+    let copied = 0
+    for (const paths of this.pcmCapture.getResult().speakerFiles.values()) {
+      for (const path of paths) {
+        await copyFile(path, join(destDir, basename(path)))
+        copied++
+      }
+    }
+
+    this.logger.warn(
+      { recordingId: this.recordingId, destDir, files: copied },
+      'DISRECORD_KEEP_PCM is set — per-speaker audio RETAINED after this session (#12). Delete it when the tuning corpus is no longer needed.',
+    )
   }
 
   /**

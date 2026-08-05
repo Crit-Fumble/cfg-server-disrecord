@@ -72,6 +72,21 @@ export interface StandaloneConfig {
    * cap (≈1 MB/min of mixed audio ⇒ 8 is a safe default when enabled).
    */
   chunkMinutes: number
+  /**
+   * Retain per-speaker PCM after a recording instead of deleting it with the
+   * temp dir. Off by default and opt-in ONLY (`DISRECORD_KEEP_PCM=1`).
+   *
+   * The mixed mp3 that normally survives is the wrong input for tuning
+   * Deepgram: `utteranceEndMs` and `endpointing` act on per-speaker silence
+   * structure, and in a mix somebody is nearly always talking, so the silence
+   * pattern bears no relation to any individual stream. Tuning against the mix
+   * produces confident, wrong answers (#12).
+   *
+   * Opt-in because per-speaker audio is the most sensitive artifact this
+   * container holds — it must never be retained by default, and every session
+   * that retains it is logged at WARN.
+   */
+  keepPcm: boolean
   /** HTTP control-server port. Default 8080. */
   controlPort: number
   /**
@@ -232,6 +247,10 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     deepgramModel: optionalEnv('DEEPGRAM_MODEL', 'nova-3'),
     deepgramLanguage: optionalEnv('DEEPGRAM_LANGUAGE', 'en'),
     outputDir: optionalEnv('OUTPUT_DIR', '/data/recordings'),
+    // Strictly opt-in — see StandaloneConfig.keepPcm. Only an explicit `1` or
+    // `true` enables it; anything else (including a stray `0`) leaves the
+    // per-speaker audio deleted at stop, which is the safe default.
+    keepPcm: process.env.DISRECORD_KEEP_PCM === '1' || process.env.DISRECORD_KEEP_PCM === 'true',
     controlPort,
     controlToken: process.env.CONTROL_TOKEN || undefined,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
