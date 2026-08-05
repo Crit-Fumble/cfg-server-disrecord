@@ -29,10 +29,10 @@ import { ChunkRecorder, type ChunkInfo } from './chunk-recorder.js'
 import { createRecordingThread, postChunk, postRecording, tempDirOf } from '../discord/thread-poster.js'
 import { SpeakerWebhookManager } from '../discord/speaker-webhook.js'
 import { ConsentSync } from '../phone-home/consent-sync.js'
+import { CaptionAccumulator } from './caption-accumulator.js'
 import type { CoreServerClient } from '../phone-home/core-client.js'
 import type { CfgHostedConfig } from '../config.js'
 import type { OutputSink } from './output-sink.js'
-import type { CaptionEntry } from './caption-types.js'
 import type { Logger } from '../logger.js'
 
 /**
@@ -136,7 +136,13 @@ export class SessionController {
   private chunkRecorder: ChunkRecorder | null = null
   private session!: RecordingSession
   private voice!: VoiceCapture
-  private readonly captions: CaptionEntry[] = []
+  /**
+   * The session's transcript record. Bounded on two axes — no word-level
+   * timings, hard entry cap — because it lives for the whole recording and
+   * a 12hr session would otherwise grow it without limit (#6). See
+   * {@link CaptionAccumulator}.
+   */
+  private readonly captions: CaptionAccumulator
   private threadId: string | null = null
   /**
    * Tracks whether we've set the bot's presence to the recording-indicator
@@ -257,6 +263,7 @@ export class SessionController {
     this.guildId = params.guildId
     this.voiceChannelId = params.voiceChannelId
     this.logger = params.logger
+    this.captions = new CaptionAccumulator({ logger: this.logger })
   }
 
   /** Build the pipeline, join voice, and post the initial consent prompt. */
@@ -735,7 +742,14 @@ export class SessionController {
     )
 
     await this.session.stop()
-    this.logger.info({ recordingId: rid }, '[runStop] 3/9 recording session stopped')
+    this.logger.info(
+      {
+        recordingId: rid,
+        captions: this.captions.size,
+        captionsDropped: this.captions.droppedCount,
+      },
+      '[runStop] 3/9 recording session stopped',
+    )
 
     // CFG-hosted: stop the billing timer + post the final partial-minute
     // tick. Best-effort — a failed tick must not block post-processing.
@@ -758,7 +772,7 @@ export class SessionController {
         },
         this.logger,
         {
-          captions: this.captions.length > 0 ? this.captions : undefined,
+          captions: this.captions.size > 0 ? this.captions.snapshot() : undefined,
           redactedSpeakerIds: this.redactedSpeakerIds(),
         },
       )
@@ -918,11 +932,13 @@ export class SessionController {
     // surcharge bill. Set BEFORE pushing the caption so a tick that fires
     // concurrently with the first event still sees the flag.
     this.transcriptionDelivered = true
-    this.captions.push({
+    // `event.words` is deliberately NOT retained — the accumulator's whole
+    // job is to keep the session-lifetime record small, and the word array is
+    // consumed below (phone-home) rather than at stop. See CaptionAccumulator.
+    this.captions.add({
       speakerName: event.speakerName,
       speakerId: event.speakerId,
       transcript: event.transcript,
-      words: event.words,
       startSec: event.startSec,
       endSec: event.endSec,
     })
@@ -1187,12 +1203,7 @@ export class SessionController {
   }
 
   private redactedSpeakerIds(): Set<string> {
-    const consented = this.consent.consentedIds()
-    const redacted = new Set<string>()
-    for (const c of this.captions) {
-      if (!consented.has(c.speakerId)) redacted.add(c.speakerId)
-    }
-    return redacted
+    return this.captions.redactedSpeakerIds(this.consent.consentedIds())
   }
 
   /**
