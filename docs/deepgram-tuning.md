@@ -58,6 +58,11 @@ file as-is.
 
 Without a reference the harness still reports everything except WER.
 
+> ⚠️ **Correct a sample, not a whole session.** WER is O(reference × hypothesis)
+> comparisons, which is instant on the few-thousand-word transcripts a
+> `--limit-sec` sample produces and would appear to hang on a full multi-hour
+> reference. Keep the reference the same length as the sample you replay.
+
 ## 3. Run the sweep
 
 ```bash

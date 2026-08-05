@@ -64,6 +64,13 @@ export function extractVttText(content: string): string {
  *
  * Two rolling rows rather than a full matrix — a 12-hour reference is ~100k
  * words and the square matrix would be 10^10 cells.
+ *
+ * ⚠️ Rolling rows bound MEMORY, not TIME: this is still O(reference ×
+ * hypothesis) comparisons. Sized for what the harness actually feeds it — a
+ * `--limit-sec`-bounded sample, where both sides are thousands of words and it
+ * returns instantly — NOT for scoring a whole multi-hour session against a
+ * full-length reference, which would appear to hang. Score a sample, not a
+ * session.
  */
 export function wordErrorRate(reference: string, hypothesis: string): WerResult {
   const ref = normalizeWords(reference)

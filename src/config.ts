@@ -74,7 +74,9 @@ export interface StandaloneConfig {
   chunkMinutes: number
   /**
    * Retain per-speaker PCM after a recording instead of deleting it with the
-   * temp dir. Off by default and opt-in ONLY (`DISRECORD_KEEP_PCM=1`).
+   * temp dir. Off by default, opt-in ONLY (`DISRECORD_KEEP_PCM=1`), and
+   * **self-host only** — forced false whenever `cfg` is present, regardless of
+   * the env var.
    *
    * The mixed mp3 that normally survives is the wrong input for tuning
    * Deepgram: `utteranceEndMs` and `endpointing` act on per-speaker silence
@@ -84,7 +86,9 @@ export interface StandaloneConfig {
    *
    * Opt-in because per-speaker audio is the most sensitive artifact this
    * container holds — it must never be retained by default, and every session
-   * that retains it is logged at WARN.
+   * that retains it is logged at WARN. Self-host only because those speakers
+   * consented to being recorded, not to CFG keeping their separated,
+   * individually-identifiable voice track.
    */
   keepPcm: boolean
   /** HTTP control-server port. Default 8080. */
@@ -240,6 +244,26 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     throw new Error(`Invalid DISRECORD_CHUNK_MINUTES: ${chunkRaw}`)
   }
 
+  const cfg = resolveCfgHostedConfig()
+
+  // Per-speaker audio retention (#12). Two independent gates, because this is
+  // the most sensitive artifact the container holds:
+  //
+  //   1. Strictly opt-in — only an explicit `1`/`true`. Anything else,
+  //      including a stray `0`, leaves the audio deleted at stop.
+  //   2. SELF-HOST ONLY. A CFG-hosted container must never retain it, whatever
+  //      the env says. Those speakers consented to being *recorded* — to a
+  //      mixed mp3 in their own Discord thread — not to the platform keeping
+  //      their separated, individually-identifiable voice track. A self-hoster
+  //      retaining their own group's audio is their call to make; CFG making
+  //      that call on a user's behalf is not.
+  //
+  // Ignored-and-warned rather than fatal: refusing to boot would fail a
+  // recording the user is waiting on, while ignoring achieves the entire
+  // protective purpose. `standalone.ts` logs when a set value is dropped.
+  const keepPcmRequested =
+    process.env.DISRECORD_KEEP_PCM === '1' || process.env.DISRECORD_KEEP_PCM === 'true'
+
   return {
     discordToken: requireEnv('DISRECORD_DISCORD_TOKEN'),
     deepgramKey,
@@ -247,14 +271,23 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     deepgramModel: optionalEnv('DEEPGRAM_MODEL', 'nova-3'),
     deepgramLanguage: optionalEnv('DEEPGRAM_LANGUAGE', 'en'),
     outputDir: optionalEnv('OUTPUT_DIR', '/data/recordings'),
-    // Strictly opt-in — see StandaloneConfig.keepPcm. Only an explicit `1` or
-    // `true` enables it; anything else (including a stray `0`) leaves the
-    // per-speaker audio deleted at stop, which is the safe default.
-    keepPcm: process.env.DISRECORD_KEEP_PCM === '1' || process.env.DISRECORD_KEEP_PCM === 'true',
+    keepPcm: keepPcmRequested && cfg == null,
     controlPort,
     controlToken: process.env.CONTROL_TOKEN || undefined,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
     chunkMinutes,
-    cfg: resolveCfgHostedConfig(),
+    cfg,
   }
+}
+
+/**
+ * True when the operator asked for PCM retention but the resolved config
+ * refused it — i.e. `DISRECORD_KEEP_PCM` was set on a CFG-hosted container.
+ * Exists so `standalone.ts` can say so at boot instead of leaving an operator
+ * to wonder why no corpus appears.
+ */
+export function keepPcmWasIgnored(config: StandaloneConfig): boolean {
+  const requested =
+    process.env.DISRECORD_KEEP_PCM === '1' || process.env.DISRECORD_KEEP_PCM === 'true'
+  return requested && !config.keepPcm
 }

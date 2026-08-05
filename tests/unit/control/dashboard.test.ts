@@ -73,6 +73,26 @@ describe('self-host dashboard', () => {
     expect(res.body).toContain('<title>DisRecord</title>')
   })
 
+  it('ships a page whose script actually parses', async () => {
+    // The page's JS lives inside a TS template literal, where the compiler
+    // sees nothing but an opaque string — a syntax error in there typechecks
+    // clean and ships. This compiles the script without running it, so that
+    // class of edit fails here rather than in someone's browser. (Verified by
+    // mutation: breaking `renderRecordings()`'s signature gives 0 typecheck
+    // errors and turns this spec red.)
+    //
+    // It is a SYNTAX check only. An accidental `${...}` that deletes a whole
+    // statement still parses, and a DOM or logic error still parses — those
+    // need the page actually driven in a browser.
+    app = await makeServer({ dashboard: true })
+    const body = (await app.inject({ method: 'GET', url: '/' })).body
+
+    const script = /<script>([\s\S]*?)<\/script>/.exec(body)?.[1]
+    expect(script).toBeTruthy()
+    expect(script!.length).toBeGreaterThan(500)
+    expect(() => new Function(script!)).not.toThrow()
+  })
+
   it('has NO page and NO data endpoints when CFG-hosted', async () => {
     // core-server owns that surface, and the container is not reachable from a
     // browser there anyway — so the routes must not exist, not merely 403.
