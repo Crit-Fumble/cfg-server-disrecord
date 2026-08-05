@@ -107,6 +107,10 @@ export class RecordingService {
       deepgramLanguage: this.config.deepgramLanguage,
       chunkMinutes: this.config.chunkMinutes,
       sink: this.sink,
+      // Opt-in tuning-corpus retention (#12). The PCM lands next to the
+      // finalized recordings so an operator has one place to look — and one
+      // place to clean up.
+      keepPcmDir: this.config.keepPcm ? this.config.outputDir : undefined,
       invokerUserId: req.invokerUserId,
       existingThreadId: req.threadId ?? null,
       cfg: this.config.cfg,
