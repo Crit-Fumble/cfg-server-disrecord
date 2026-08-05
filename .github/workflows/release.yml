@@ -11,6 +11,17 @@ name: release
 #
 # Mirrors cfg-core-server's release.yml — same registry / token / BuildKit
 # secret contract for installing private @crit-fumble/* packages.
+#
+# ⚠️ `:latest` IS WHAT PRODUCTION SPAWNS (owner decision 2026-08-05). core-server
+# reads `disrecordWorkerImage` and calls dockerode `createContainer` with it —
+# an API that never pulls — so what this workflow publishes to `:latest` is
+# what the prod host runs the next time it pulls. That makes this workflow a
+# production gate, not just a build, which is why the `verify` job below exists:
+# nothing reaches `:latest` without a version match, a main ancestry check, and
+# a green CI run for the exact commit being released.
+#
+# See docs/releasing.md for the full contract, including the pull step that
+# tagging alone does NOT perform.
 
 on:
   push:
@@ -24,9 +35,63 @@ on:
 permissions:
   contents: read
   packages: write
+  checks: read
 
 jobs:
+  # Gate the publish. Cheap — seconds, no install — because it ASKS whether CI
+  # passed for this commit rather than re-running it. Re-running would both
+  # cost ~12 minutes of native compiles and prove something weaker: a fresh
+  # green run on a re-resolved dependency tree, not the run that gated `main`.
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      # Kills the drift that let package.json sit at 0.2.8 while tags reached
+      # v0.2.21 — at which point `npm version patch` proposes v0.2.9, a tag that
+      # already exists and is twelve releases stale.
+      - name: Tag matches package.json version
+        if: github.event_name == 'push'
+        run: |
+          TAG="$GITHUB_REF_NAME"
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag $TAG does not match package.json ($PKG). Bump the version in a PR into next, promote, then tag the promoted commit."
+            exit 1
+          fi
+          echo "$TAG matches package.json"
+
+      # `:latest` feeds production, so only promoted code may claim it.
+      - name: Tag is on main
+        if: github.event_name == 'push'
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA is not on main. :latest is what production spawns — release promoted commits only."
+            exit 1
+          fi
+          echo "commit is on main"
+
+      # A tag can be pushed to any commit, including one CI never saw. CI runs
+      # on push to main/next and on PRs — never on tags — so without this a
+      # release could publish an untested build straight to `:latest`.
+      - name: CI passed for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          CONCLUSION=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+            --jq '[.check_runs[] | select(.name == "test")] | first | .conclusion // "missing"')
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "::error::CI 'test' for $GITHUB_SHA is '$CONCLUSION', not success. Nothing untested reaches :latest."
+            exit 1
+          fi
+          echo "CI test check is green for $GITHUB_SHA"
+
   build:
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
