@@ -209,6 +209,17 @@ const DASHBOARD_HTML = `<!doctype html>
 const $ = (id) => document.getElementById(id);
 let guilds = [];
 let recordings = [];
+/**
+ * recordingId -> the action currently in flight for it.
+ *
+ * Lives OUTSIDE the row elements on purpose. Stopping blocks until the mix,
+ * upload and Discord post are all done — often minutes — and the 4s poll
+ * rebuilds every row in that window. State held on the button itself is
+ * destroyed by that re-render, which puts a live "Stop" back under the
+ * cursor mid-stop; the second click then 404s because the registry slot is
+ * already released.
+ */
+const pending = new Map();
 
 function token() { return sessionStorage.getItem('disrecord-token') || ''; }
 $('token').value = token();
@@ -333,29 +344,40 @@ function renderRecordings() {
     row.appendChild(meta);
     row.appendChild(el('span', r.paused ? 'pill' : 'pill live', r.status));
 
-    const toggle = el('button', null, r.paused ? 'Resume' : 'Pause');
-    toggle.onclick = () => act(r.recordingId, r.paused ? 'resume' : 'pause', toggle);
+    // An in-flight action disables BOTH buttons for that recording and shows
+    // progress on the one that is running — and it survives this re-render
+    // because "pending" is keyed on the recording, not held on the element.
+    const busy = pending.get(r.recordingId);
+    const toggleAction = r.paused ? 'resume' : 'pause';
+
+    const toggle = el('button', null, busy === toggleAction ? PROGRESS[busy] : (r.paused ? 'Resume' : 'Pause'));
+    toggle.disabled = !!busy;
+    toggle.onclick = () => act(r.recordingId, toggleAction);
     row.appendChild(toggle);
 
-    const stop = el('button', 'danger', 'Stop');
-    stop.onclick = () => act(r.recordingId, 'stop', stop);
+    const stop = el('button', 'danger', busy === 'stop' ? PROGRESS.stop : 'Stop');
+    stop.disabled = !!busy;
+    stop.onclick = () => act(r.recordingId, 'stop');
     row.appendChild(stop);
     box.appendChild(row);
   }
   if (prevPick) picker.value = prevPick;
 }
 
-async function act(id, action, button) {
-  button.disabled = true;
-  // Stop blocks until the mix, upload and Discord post are all done.
-  if (action === 'stop') button.textContent = 'Stopping…';
+const PROGRESS = { pause: 'Pausing…', resume: 'Resuming…', stop: 'Stopping…' };
+const DONE = { pause: 'Recording paused.', resume: 'Recording resumed.', stop: 'Recording stopped.' };
+
+async function act(id, action) {
+  if (pending.has(id)) return;
+  pending.set(id, action);
+  renderRecordings();
   try {
     await api('/v1/recordings/' + encodeURIComponent(id) + '/' + action, { method: 'POST' });
-    toast('Recording ' + action + 'd.');
+    toast(DONE[action]);
   } catch (err) {
     toast(err.message, true);
   } finally {
-    button.disabled = false;
+    pending.delete(id);
     refresh();
   }
 }

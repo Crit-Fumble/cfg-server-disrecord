@@ -24,7 +24,7 @@
  */
 
 import { logger as rootLogger } from './logger.js'
-import { resolveStandaloneConfig, type StandaloneConfig } from './config.js'
+import { keepPcmWasIgnored, resolveStandaloneConfig, type StandaloneConfig } from './config.js'
 import { startGateway, stopGateway } from './gateway/discord-gateway.js'
 import { RecordingService } from './recording/recording-service.js'
 import { LocalDirSink, ObjectStorageSink, type OutputSink } from './recording/output-sink.js'
@@ -45,6 +45,15 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
     },
     'starting cfg-server-disrecord in serve mode',
   )
+
+  // The one env var this container deliberately refuses to honour. Say so
+  // rather than leaving an operator to wonder why no tuning corpus appears.
+  if (keepPcmWasIgnored(config)) {
+    logger.warn(
+      'DISRECORD_KEEP_PCM is set but IGNORED — per-speaker audio retention is self-host only (#12). ' +
+        'A CFG-hosted container never retains separated speaker audio.',
+    )
+  }
 
   // ── 1. Discord gateway — log in at boot, stay connected. The login is
   // required for voice: joinVoiceChannel needs `guild.voiceAdapterCreator`,
