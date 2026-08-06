@@ -6,7 +6,7 @@ name: release
 # --tags`) and manually via the Actions UI for one-off rebuilds. The image is
 # pushed to ghcr.io/crit-fumble/cfg-server-disrecord with three tags per build:
 #   - the git ref (e.g. v0.1.2)
-#   - latest (only on default-branch tags)
+#   - latest (only on v* tags)
 #   - sha-<short-sha> (always)
 #
 # Mirrors cfg-core-server's release.yml — same registry / token / BuildKit
@@ -144,7 +144,7 @@ jobs:
           images: ghcr.io/crit-fumble/cfg-server-disrecord
           tags: |
             type=ref,event=tag
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
             type=sha,prefix=sha-,format=short
 
