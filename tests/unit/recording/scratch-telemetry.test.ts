@@ -14,7 +14,7 @@ import {
 } from '../../../src/recording/scratch-telemetry.js'
 
 function fakeLogger() {
-  return { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as never
+  return { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() }
 }
 
 describe('measureScratchUsage', () => {
@@ -82,7 +82,7 @@ describe('logScratchUsageBeforeMix', () => {
   it('logs at info when there is headroom', async () => {
     const logger = fakeLogger()
 
-    await logScratchUsageBeforeMix('rec-1', dir, [], logger)
+    await logScratchUsageBeforeMix('rec-1', dir, [], logger as never)
 
     expect(logger.info).toHaveBeenCalledWith(
       expect.objectContaining({ recordingId: 'rec-1', tempDir: dir }),
@@ -106,7 +106,7 @@ describe('logScratchUsageBeforeMix', () => {
         totalBytes: 4_000_000_000,
         projectedHeadroomBytes: -440_000_000,
       },
-      logger,
+      logger as never,
     )
 
     expect(logger.warn).toHaveBeenCalledWith(
@@ -129,7 +129,7 @@ describe('logScratchUsageBeforeMix', () => {
         totalBytes: null,
         projectedHeadroomBytes: null,
       },
-      logger,
+      logger as never,
     )
 
     expect(logger.warn).not.toHaveBeenCalled()
