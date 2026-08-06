@@ -72,7 +72,10 @@ jest.mock('../../../src/discord/speaker-webhook.js', () => ({
 
 // createRecordingThread returns our fake thread id. postRecording/tempDirOf
 // aren't reached by start().
-const mockCreateThread = jest.fn(async () => {
+// Rest params because the forwarding wrapper below spreads the real call's
+// arguments in; without them the mock is typed as zero-arg and the spread is
+// an error. It still ignores them — only call ORDER matters here.
+const mockCreateThread = jest.fn(async (..._args: unknown[]) => {
   callOrder.push('createRecordingThread')
   return 'thread-123'
 })

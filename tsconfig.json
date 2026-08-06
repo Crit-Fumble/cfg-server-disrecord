@@ -14,9 +14,14 @@
     "sourceMap": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
-    "baseUrl": ".",
+    // TS 7 REMOVED `baseUrl` (TS5102) and rejects non-relative path targets
+    // (TS5090). Without baseUrl, `paths` resolve relative to this file, so the
+    // leading `./` is what replaces it — same mapping, no behaviour change.
+    // ⚠️ tsc-alias reads these to rewrite `@/` in the emitted JS; the build
+    // checks dist for surviving `@/` imports, because a silently un-rewritten
+    // alias fails at runtime, not at compile time.
     "paths": {
-      "@/*": ["src/*"]
+      "@/*": ["./src/*"]
     }
   },
   "include": ["src/**/*"],

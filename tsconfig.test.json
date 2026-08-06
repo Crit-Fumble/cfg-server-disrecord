@@ -1,0 +1,24 @@
+// tests/ is excluded from the emit build (it must never reach dist/ — this ships
+// as a production image), which also meant it was never typechecked: `typecheck`
+// covered src and tools/ only. This project is what covers the remaining 34
+// suites; `npm run typecheck` runs all three.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // tests/ sits outside the emit rootDir; nothing is emitted here, so widen it
+    "rootDir": ".",
+    // Tests import `@/deepgram/client` extensionless, which NodeNext rejects —
+    // but tests never run under Node's ESM resolver. jest resolves them through
+    // moduleNameMapper with @swc/jest, which is bundler-shaped, so this states
+    // how they are ACTUALLY resolved instead of forcing `.js` suffixes onto 34
+    // suites to satisfy a resolver that never sees them. src keeps NodeNext.
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "types": ["jest", "node"]
+  },
+  // The base `exclude` lists tests, and exclude beats include — without this
+  // override the project would silently check nothing at all.
+  "exclude": ["node_modules", "dist"],
+  "include": ["tests/**/*.ts", "src/**/*"]
+}

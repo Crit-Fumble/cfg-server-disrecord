@@ -102,10 +102,15 @@ function makeCore(insufficientByType: Partial<Record<'server_uptime' | 'transcri
     fetchSessionPolicy: jest.fn(async () => ({ consentedUserIds: [], speakerNames: {} })),
     postTranscript: jest.fn(),
     postBillingTick,
-  } as never
+  }
 }
 
-function baseParams(core: never, cfg: CfgHostedConfig | undefined): SessionControllerParams {
+// The real shape makeCore returns — kept so assertions can still read
+// `core.postBillingTick`. The cast to the params type happens in baseParams,
+// at the ONE place the production signature actually demands it.
+type FakeCore = ReturnType<typeof makeCore>
+
+function baseParams(core: FakeCore, cfg: CfgHostedConfig | undefined): SessionControllerParams {
   return {
     recordingId: 'rec-1',
     client: fakeClient(),
@@ -120,7 +125,7 @@ function baseParams(core: never, cfg: CfgHostedConfig | undefined): SessionContr
     chunkMinutes: 0,
     sink: {} as never,
     cfg,
-    core,
+    core: core as never,
     logger: silentLogger,
   }
 }
