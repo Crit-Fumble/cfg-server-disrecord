@@ -43,7 +43,8 @@ Don't bypass it with `--no-verify` — a red suite blocks the push for a reason.
 
 Use [Conventional Commits](https://www.conventionalcommits.org/)
 (`feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `ci`, `build`). Fork, branch
-from `main`, add tests for new behavior, run `npm run typecheck && npm test`
+from `next` (the release-candidate branch — `main` is released truth and is
+only ever fast-forwarded to), add tests for new behavior, run `npm run typecheck && npm test`
 before pushing, and explain the *why* in the PR description.
 
 ## License
