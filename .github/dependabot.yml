@@ -1,16 +1,24 @@
 version: 2
+
 updates:
   - package-ecosystem: npm
     directory: /
+    # The RC branch. WITHOUT this, dependabot targets the DEFAULT branch (`main`),
+    # which is released truth and only ever fast-forwarded to — a bump landing
+    # there breaks the promotion (dt#473). Literal by necessity: GitHub parses this
+    # file itself, so it cannot read dev/repos.json. Edit by hand on a rename.
+    target-branch: next
     schedule:
       interval: weekly
     groups:
       npm-minor-patch:
         update-types: [minor, patch]
     ignore:
+      # TypeScript majors are a coordinated cross-repo migration, not a per-repo bump.
       - dependency-name: typescript
         update-types: [version-update:semver-major]
   - package-ecosystem: github-actions
     directory: /
+    target-branch: next
     schedule:
       interval: weekly
