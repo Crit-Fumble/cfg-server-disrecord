@@ -158,6 +158,22 @@ export class ChunkRecorder {
     const startByte = this.windowStartByte
     if (endByte <= startByte) return // no new audio since the last cut
 
+    // A `final` flush whose window still starts at byte 0 would be chunk 01
+    // spanning the ENTIRE session — byte-for-byte the content of the
+    // whole-session mp3 that posts moments later, so short recordings ended
+    // as two identical files in the thread (owner report, 2026-08-07). Skip
+    // it: chunks exist to let listeners follow ALONG a long session, and a
+    // session that never outlived its first window has nothing to follow.
+    // Interval/pause cuts (reason !== 'final') still post from byte 0 —
+    // their session is still running, which is the whole point.
+    if (reason === 'final' && startByte === 0) {
+      this.p.logger.info(
+        { recordingId: this.p.recordingId },
+        'skipping final chunk — single-window session, whole-session mp3 carries it',
+      )
+      return
+    }
+
     const speakerFiles = this.p.getSpeakerFiles()
     const windowFiles = new Map<string, string[]>()
     try {
