@@ -84,3 +84,60 @@ describe('planWindowReads', () => {
     expect(planWindowReads(withEmpty, 10, 50)).toEqual([{ path: 'a-001.pcm', offset: 10, length: 40 }])
   })
 })
+
+// ── The redundant-final-chunk guard (owner report, 2026-08-07) ──────────────
+//
+// A session shorter than one chunk window used to end as TWO identical mp3s in
+// the thread: the `final` flush (chunk 01, spanning the whole session) plus the
+// whole-session mp3. The guard skips the final cut only when its window still
+// starts at byte 0 — i.e. no interval/pause cut ever advanced the cursor.
+
+import { mkdtemp, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join as joinPath } from 'node:path'
+import { ChunkRecorder } from '../../../src/recording/chunk-recorder.js'
+
+jest.mock('../../../src/recording/ffmpeg.js', () => ({
+  buildFfmpegArgs: jest.fn((_files: unknown, outPath: string) => [outPath]),
+  runFfmpeg: jest.fn(async (args: string[]) => {
+    await (await import('node:fs/promises')).writeFile(args[0], Buffer.alloc(64))
+  }),
+}))
+
+const quietLogger = { info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn() } as never
+
+describe('ChunkRecorder final-flush guard', () => {
+  async function makeRecorder(timeline: () => number, postChunk: jest.Mock) {
+    const tempDir = await mkdtemp(joinPath(tmpdir(), 'chunk-guard-'))
+    const pcmPath = joinPath(tempDir, 'user-000.pcm')
+    await writeFile(pcmPath, Buffer.alloc(32_000))
+    return new ChunkRecorder({
+      recordingId: 'guard-test',
+      chunkMinutes: 10,
+      tempDir,
+      getSpeakerFiles: () => new Map([['user', [pcmPath]]]),
+      timelineByteNow: timeline,
+      postChunk: postChunk as never,
+      logger: quietLogger,
+    })
+  }
+
+  it('skips the final cut when no interval cut ever ran — the session mp3 already carries it', async () => {
+    const postChunk = jest.fn(async () => {})
+    const recorder = await makeRecorder(() => 32_000, postChunk)
+    await recorder.finalize()
+    expect(postChunk).not.toHaveBeenCalled()
+  })
+
+  it('still posts the final cut when an earlier window advanced the cursor', async () => {
+    const postChunk = jest.fn(async () => {})
+    let now = 16_000
+    const recorder = await makeRecorder(() => now, postChunk)
+    // onResume() advances the window cursor exactly like an interval cut
+    // having run — the session outlived its first window.
+    recorder.onResume()
+    now = 32_000
+    await recorder.finalize()
+    expect(postChunk).toHaveBeenCalledTimes(1)
+  })
+})
