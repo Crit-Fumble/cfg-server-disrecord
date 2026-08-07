@@ -31,6 +31,26 @@ import type { PostProcessResult } from '../recording/post-process.js'
 import type { Logger } from '../logger.js'
 
 /**
+ * Pick the next free thread name in the `base` / `base N` family.
+ *
+ * An existing bare `base` counts as 1, `base N` as N; the result is
+ * max + 1 (gaps are not refilled — "3" after a deleted "2" would make
+ * chronology lie). Names outside the family are ignored, and the base is
+ * regex-escaped because voice channel names can contain anything.
+ */
+export function nextThreadName(base: string, existingNames: string[]): string {
+  const esc = base.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const family = new RegExp(`^${esc}(?: (\\d+))?$`)
+  let max = 0
+  for (const name of existingNames) {
+    const m = family.exec(name)
+    if (!m) continue
+    max = Math.max(max, m[1] ? Number(m[1]) : 1)
+  }
+  return max === 0 ? base : `${base} ${max + 1}`
+}
+
+/**
  * Create a PRIVATE thread under `textChannelId` for a recording and invite
  * every member who was in voice at session start so they (and only they)
  * can see the live transcript + final recording. Returns the new thread's
@@ -71,7 +91,22 @@ export async function createRecordingThread(
     })
     const kindLabel = transcription ? 'Transcription' : 'Recording'
     const rawName = `${voiceChannelName} - ${dateStr} - ${kindLabel}`
-    const threadName = rawName.length > 100 ? rawName.slice(0, 100) : rawName
+    // 96, not 100: leave room for the " N" de-dup suffix below inside
+    // Discord's 100-char thread-name cap.
+    const base = rawName.length > 96 ? rawName.slice(0, 96) : rawName
+
+    // Every recording gets its OWN thread (owner decision 2026-08-07 — the
+    // core-side same-day reuse is gone), so same-day names now collide by
+    // design. De-duplicate with a numeric suffix: base, "base 2", "base 3".
+    // Best-effort: if the listing fails, post under the plain name rather
+    // than blocking the recording thread.
+    let threadName = base
+    try {
+      const active = await (channel as TextChannel).threads.fetchActive()
+      threadName = nextThreadName(base, active.threads.map((t) => t.name))
+    } catch (listErr) {
+      logger.warn({ err: listErr, textChannelId }, 'could not list active threads — using unsuffixed thread name')
+    }
 
     // Try private + invitable:false (best privacy, needs ManageThreads).
     // Then plain private (only needs CreatePrivateThreads — the common
