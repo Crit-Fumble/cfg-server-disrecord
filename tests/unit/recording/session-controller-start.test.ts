@@ -329,23 +329,21 @@ describe('SessionController.start() — issue #5 (revised)', () => {
 // must NEVER incur the platform's `transcription` surcharge tick — the user is
 // paying Deepgram directly. The gate is the `transcriptionBilled` flag derived
 // in start():
-//   transcriptionBilled = cfg.transcriptionCtPerMinute != null
-//                          && effectiveMode === 'platform'
+//   transcriptionBilled = cfg != null && effectiveMode === 'platform'
 //   effectiveMode        = transcription ? deepgramMode : 'disabled'
-// These tests pin the derivation directly (with the platform surcharge rate
-// configured, so `deepgramMode` is the ONLY thing deciding the flag). The
-// billing suite (session-controller-billing.test.ts) separately proves that a
-// false flag means the `transcription` tick is never posted — together they
-// close #36's "No transcription CT charge for BYOK sessions".
+// (The worker knows no rates — core prices the surcharge; the flag only
+// signals that it applies.) These tests pin the derivation directly, so
+// `deepgramMode` is the ONLY thing deciding the flag. The billing suite
+// (session-controller-billing.test.ts) separately proves that a false flag
+// means the `transcription` tick is never posted — together they close #36's
+// "No transcription CT charge for BYOK sessions".
 describe('SessionController.start() — BYOK transcription-billing gate (#36)', () => {
   const HOSTED: CfgHostedConfig = {
     coreServerUrl: 'http://core:3001',
     coreServerToken: 'jwt-token',
     installationId: 'inst-1',
     userId: 'user-1',
-    ctPerMinute: 13,
     size: 'small',
-    transcriptionCtPerMinute: 7, // platform surcharge IS configured...
   }
   const transcriptionBilledOf = (c: SessionController) =>
     (c as unknown as { transcriptionBilled: boolean }).transcriptionBilled

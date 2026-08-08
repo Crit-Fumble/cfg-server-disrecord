@@ -58,8 +58,12 @@ export interface BillingTickPayload {
    * Deepgram key only).
    */
   resourceType: 'server_uptime' | 'transcription'
+  /**
+   * Active (non-paused) minutes measured by the worker. The worker sends NO
+   * rate — core prices the tick from the session's persisted size (billing
+   * is handled only in core projects). Requires cfg-core-server#305+.
+   */
   minutes: number
-  ctPerMinute: number
   label: string
 }
 

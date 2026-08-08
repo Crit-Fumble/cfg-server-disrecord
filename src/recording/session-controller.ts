@@ -186,8 +186,9 @@ export class SessionController {
   private readonly billingMeter = new ActiveTimeMeter()
   /**
    * Whether this session incurs the separate `transcription` surcharge tick.
-   * True only when CFG-hosted with `transcriptionCtPerMinute` set (platform
-   * Deepgram key) AND transcription is actually active for the session.
+   * True only when CFG-hosted AND the session runs on the platform Deepgram
+   * key (`effectiveMode === 'platform'`). Core prices the surcharge; the
+   * worker only signals that it applies.
    */
   private transcriptionBilled = false
   /**
@@ -505,12 +506,14 @@ export class SessionController {
     this.setRecordingPresence()
 
     // ── CFG-hosted: arm the pause-aware billing tick ────────────────────────
-    // The separate `transcription` surcharge tick fires only when the
-    // platform Deepgram key is in use (`transcriptionCtPerMinute` set) AND
-    // transcription is actually running for this session. BYOK or disabled
-    // transcription ⇒ server uptime only, no surcharge.
-    this.transcriptionBilled =
-      p.cfg?.transcriptionCtPerMinute != null && effectiveMode === 'platform'
+    // The separate `transcription` surcharge tick fires only when this
+    // session runs on the platform Deepgram key (`effectiveMode ===
+    // 'platform'`). BYOK or disabled transcription ⇒ server uptime only, no
+    // surcharge. Intent comes from the session's own mode — not from the
+    // legacy rate env — and the platform-key-missing edge is covered by the
+    // delivery gate: no key ⇒ no transcripts ⇒ `transcriptionDelivered`
+    // stays false ⇒ no surcharge posted.
+    this.transcriptionBilled = p.cfg != null && effectiveMode === 'platform'
     if (p.cfg) this.startBillingTimer()
 
     // Real-time mp3 chunking (#131) — additive + gated. A no-op unless
@@ -668,11 +671,12 @@ export class SessionController {
     // no transcripts flow, transcriptionDelivered stays false, and the
     // surcharge is never posted — the user only pays server_uptime.
     // Fire-and-forget: a transcription 402 must NOT stop the recording.
-    if (this.transcriptionBilled && this.transcriptionDelivered && cfg.transcriptionCtPerMinute != null) {
+    // No rate rides on any tick — the worker reports minutes and core
+    // prices them from the session's persisted size (cfg-core-server#305).
+    if (this.transcriptionBilled && this.transcriptionDelivered) {
       void this.params.core.postBillingTick({
         resourceType: 'transcription',
         minutes,
-        ctPerMinute: cfg.transcriptionCtPerMinute,
         label: `Live Transcription: ${suffix}`,
       })
     }
@@ -681,7 +685,6 @@ export class SessionController {
     const { insufficientCoins } = await this.params.core.postBillingTick({
       resourceType: 'server_uptime',
       minutes,
-      ctPerMinute: cfg.ctPerMinute,
       label: `Recording Server (${cfg.size}): ${suffix}`,
     })
     if (insufficientCoins) await this.handleInsufficientCoins()
