@@ -74,7 +74,6 @@ const HOSTED: CfgHostedConfig = {
   coreServerToken: 'jwt-token',
   installationId: 'inst-1',
   userId: 'user-1',
-  ctPerMinute: 13,
   size: 'small',
 }
 
@@ -197,8 +196,7 @@ describe('SessionController #120 — insufficient-Crit-Coin graceful stop', () =
     // Force the transcription surcharge to be live + delivered so the tick
     // actually fires, and make ONLY the transcription tick report 402.
     const core = makeCore({ transcription: true, server_uptime: false })
-    const cfg: CfgHostedConfig = { ...HOSTED, transcriptionCtPerMinute: 7 }
-    const controller = new SessionController(baseParams(core, cfg))
+    const controller = new SessionController(baseParams(core, HOSTED))
     priv(controller).threadId = 'thread-123'
     ;(controller as unknown as { transcriptionBilled: boolean }).transcriptionBilled = true
     ;(controller as unknown as { transcriptionDelivered: boolean }).transcriptionDelivered = true

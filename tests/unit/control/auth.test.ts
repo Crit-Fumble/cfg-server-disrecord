@@ -55,7 +55,6 @@ describe('createControlAuthenticator — CFG-hosted per-session JWT', () => {
       coreServerToken,
       installationId: 'inst-1',
       userId: 'user-1',
-      ctPerMinute: 13,
       size: 'small',
     }
   }
@@ -92,7 +91,6 @@ describe('createControlAuthenticator — CFG-hosted per-session JWT', () => {
       coreServerToken: wrongScopeToken,
       installationId: 'inst-1',
       userId: 'user-1',
-      ctPerMinute: 13,
       size: 'small',
     }
     const auth = createControlAuthenticator({ cfg })
@@ -108,7 +106,6 @@ describe('createControlAuthenticator — CFG-hosted per-session JWT', () => {
       coreServerToken: mismatchedToken,
       installationId: 'inst-1',
       userId: 'user-1',
-      ctPerMinute: 13,
       size: 'small',
     }
     const auth = createControlAuthenticator({ cfg })

@@ -62,7 +62,7 @@ describe('resolveStandaloneConfig', () => {
     expect(() => resolveStandaloneConfig()).toThrow(/CONTROL_PORT/)
   })
 
-  describe('CFG-hosted transcription surcharge', () => {
+  describe('billing-rate envs are ignored (pricing is core-side)', () => {
     const CFG_ENV = {
       ...BASE_ENV,
       CORE_SERVER_URL: 'http://core:3001',
@@ -71,29 +71,22 @@ describe('resolveStandaloneConfig', () => {
       DISRECORD_USER_ID: 'user-1',
     }
 
-    it('leaves transcriptionCtPerMinute undefined when the env var is absent', () => {
-      setEnv(CFG_ENV)
-      expect(resolveStandaloneConfig().cfg?.transcriptionCtPerMinute).toBeUndefined()
+    it('resolves a hosted config with no rate fields, even when an older core injects them', () => {
+      setEnv({ ...CFG_ENV, DISRECORD_CT_PER_MIN: '13', DISRECORD_TRANSCRIPTION_CT_PER_MIN: '2.5' })
+      const cfg = resolveStandaloneConfig().cfg
+      expect(cfg).toBeDefined()
+      // The worker knows no prices — the fields must not exist on the config
+      // at all, so nothing downstream can quietly start reading them again.
+      expect(cfg as object).not.toHaveProperty('ctPerMinute')
+      expect(cfg as object).not.toHaveProperty('transcriptionCtPerMinute')
     })
 
-    it('treats an empty DISRECORD_TRANSCRIPTION_CT_PER_MIN as absent (undefined)', () => {
-      setEnv({ ...CFG_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '' })
-      expect(resolveStandaloneConfig().cfg?.transcriptionCtPerMinute).toBeUndefined()
+    it('does not reject garbage in a dead rate env (the vars are inert)', () => {
+      setEnv({ ...CFG_ENV, DISRECORD_CT_PER_MIN: 'abc', DISRECORD_TRANSCRIPTION_CT_PER_MIN: '0' })
+      expect(() => resolveStandaloneConfig()).not.toThrow()
     })
 
-    it('resolves a numeric DISRECORD_TRANSCRIPTION_CT_PER_MIN', () => {
-      setEnv({ ...CFG_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '2.5' })
-      expect(resolveStandaloneConfig().cfg?.transcriptionCtPerMinute).toBe(2.5)
-    })
-
-    it('rejects a non-numeric / non-positive surcharge rate', () => {
-      setEnv({ ...CFG_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: 'abc' })
-      expect(() => resolveStandaloneConfig()).toThrow(/DISRECORD_TRANSCRIPTION_CT_PER_MIN/)
-      setEnv({ ...CFG_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '0' })
-      expect(() => resolveStandaloneConfig()).toThrow(/DISRECORD_TRANSCRIPTION_CT_PER_MIN/)
-    })
-
-    it('is undefined for a self-host container (no CORE_SERVER_URL)', () => {
+    it('cfg stays undefined for a self-host container regardless of rate envs', () => {
       setEnv({ ...BASE_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '2' })
       expect(resolveStandaloneConfig().cfg).toBeUndefined()
     })

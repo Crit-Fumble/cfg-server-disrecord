@@ -130,17 +130,14 @@ export interface CfgHostedConfig {
   installationId: string
   /** Owning user — logging / billing attribution. */
   userId: string
-  /** Worker-billing rate in CT/min, computed by core-server's slot-fraction formula. */
-  ctPerMinute: number
-  /** Container instance size — informational only. */
-  size: string
   /**
-   * Live-transcription surcharge rate in CT/min. PRESENCE is the signal that
-   * this session runs on the platform Deepgram key and must incur a separate
-   * itemized `transcription` billing tick (parallel to the `bot_container`
-   * uptime tick). Absent ⇒ BYOK or transcription disabled ⇒ no surcharge.
+   * Container instance size — informational only (ledger label text). The
+   * worker knows NO prices: it meters active minutes and core prices every
+   * tick from the session's persisted size. Requires a core build with
+   * core-side tick pricing (cfg-core-server#305) — do not pin this worker
+   * image into prod ahead of it.
    */
-  transcriptionCtPerMinute?: number
+  size: string
   /** Object-storage credentials — when present the container uploads finalized mp3/VTT. */
   objectStorage?: ObjectStorageConfig
 }
@@ -175,23 +172,11 @@ export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
   const coreServerUrl = process.env.CORE_SERVER_URL
   if (!coreServerUrl) return undefined
 
-  const ctPerMinRaw = process.env.DISRECORD_CT_PER_MIN
-  const ctPerMinute = ctPerMinRaw ? Number(ctPerMinRaw) : 13
-  if (!Number.isFinite(ctPerMinute) || ctPerMinute <= 0) {
-    throw new Error(`Invalid DISRECORD_CT_PER_MIN: ${ctPerMinRaw}`)
-  }
-
-  // Transcription surcharge rate — optional. Injected by core-server only
-  // when the recording's Deepgram mode is 'platform' (platform key). Absent
-  // for BYOK or disabled transcription, in which case no surcharge is billed.
-  const transcriptionRaw = process.env.DISRECORD_TRANSCRIPTION_CT_PER_MIN
-  let transcriptionCtPerMinute: number | undefined
-  if (transcriptionRaw !== undefined && transcriptionRaw !== '') {
-    transcriptionCtPerMinute = Number(transcriptionRaw)
-    if (!Number.isFinite(transcriptionCtPerMinute) || transcriptionCtPerMinute <= 0) {
-      throw new Error(`Invalid DISRECORD_TRANSCRIPTION_CT_PER_MIN: ${transcriptionRaw}`)
-    }
-  }
+  // No billing rates are read here — deliberately. The worker meters
+  // active minutes; core prices them from the session's persisted size
+  // (billing is handled only in core projects). The old DISRECORD_CT_PER_MIN
+  // / DISRECORD_TRANSCRIPTION_CT_PER_MIN envs are ignored if still injected
+  // by an older core build.
 
   let objectStorage: ObjectStorageConfig | undefined
   const storageKey = process.env.DO_SPACES_KEY
@@ -210,9 +195,7 @@ export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
     coreServerToken: requireEnv('CORE_SERVER_TOKEN'),
     installationId: requireEnv('DISRECORD_INSTALLATION_ID'),
     userId: requireEnv('DISRECORD_USER_ID'),
-    ctPerMinute,
     size: optionalEnv('DISRECORD_SIZE', 'small'),
-    transcriptionCtPerMinute,
     objectStorage,
   }
 }

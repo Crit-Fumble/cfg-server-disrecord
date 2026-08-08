@@ -74,7 +74,6 @@ const HOSTED: CfgHostedConfig = {
   coreServerToken: 'jwt-token',
   installationId: 'inst-1',
   userId: 'user-1',
-  ctPerMinute: 13,
   size: 'small',
 }
 
