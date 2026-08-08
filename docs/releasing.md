@@ -1,7 +1,6 @@
 # Releasing DisRecord
 
-Everything this repo owns to get a build into production, and an honest account
-of the one step it does not.
+Everything this repo owns to get a build into production.
 
 ## The contract
 
@@ -11,33 +10,30 @@ PR (version bump rides it) ──▶ next ──fast-forward──▶ main ─�
                                                             ghcr.io/crit-fumble/
                                                         cfg-server-disrecord:latest
                                                                           │
-                                              prod host `docker pull` ────┘
-                                                                          │
-                                                core-server spawns the worker
+                                   core-server pulls, then spawns ────────┘
+                                       the worker (next session)
 ```
 
 `ghcr.io/crit-fumble/cfg-server-disrecord` is a **public** package, so no pull
 secret is involved anywhere.
 
-## ⚠️ Tagging alone does not deploy
+## Tagging deploys — at the next session, not immediately
 
-Production spawns **`:latest`** (owner decision 2026-08-05). It is tempting to
-read that as "tag and you're done". It is not, for a reason that is easy to miss:
+Production spawns **`:latest`** (owner decision 2026-08-05), and core-server
+pulls it before every spawn: `container-spawn.ts` passes `imagePull: 'always'`,
+which `clients/container/client.ts` honours by calling `pullImage` ahead of
+`createContainer` (falling back to the local copy if the registry is
+unreachable — a stale worker beats no worker).
 
-core-server spawns the worker with dockerode's `createContainer`
-(`cfg-core-server/src/services/disrecord/container-spawn.ts`), and **that API
-never pulls**. It uses whatever `:latest` the host's Docker daemon already has,
-and 404s if it has none. So publishing a new `:latest` changes nothing on the
-host until something runs `docker pull`.
+So **a worker release is: tag → wait for the image**. There is no deploy step
+and no host command; the next recording session starts on the new build. A
+session already running keeps its container until it ends.
 
-Today the only thing that does is `orchestration/scripts/deploy.sh`, whose own
-comment says it plainly: *"the target host's local daemon keeps the last
-`:latest` it pulled... silently runs against a stale worker until someone
-manually pulls."*
-
-**So a worker release is: tag → wait for the image → refresh the host.** Until
-core-server pulls before spawning, the last step is manual and skipping it is
-silent — the recording still works, it just runs the old code.
+> ⚠️ **This section used to say the opposite** — that `createContainer` never
+> pulls, so a release needed a manual `docker pull` on the prod host. That was
+> true when it was written and stopped being true when `imagePull: 'always'`
+> landed. Verified against `client.ts:486-500` on 2026-08-08. If you are
+> holding a checklist with a "refresh the host" step on it, drop that step.
 
 ## Cutting a release
 
@@ -100,9 +96,10 @@ rule, both must agree:
 - `orchestration/config-overrides/production.json` ← the one the running
   container actually reads
 
-Both should read `ghcr.io/crit-fumble/cfg-server-disrecord:latest`. Note that
-`deploy.sh` has always pulled `:latest`, so any pinned value there was pulling
-one tag and spawning another — aligning both on `:latest` removes that mismatch.
+Both should read `ghcr.io/crit-fumble/cfg-server-disrecord:latest`, and both do
+today — **so a normal release changes neither file.** A version pinned here is
+an incident tool (freeze the fleet on a known-good build), not part of shipping;
+core-server only rolls `:latest` forward at spawn when the value *is* `:latest`.
 
 ## Rollback
 
@@ -111,7 +108,8 @@ re-publishing, not reverting a config value:
 
 1. Find the good build's tag on the [package
    page](https://github.com/orgs/Crit-Fumble/packages/container/package/cfg-server-disrecord).
-2. Re-point `:latest` at it and refresh the host:
+2. Re-point `:latest` at it (run anywhere with registry access — the prod host
+   picks it up at the next spawn, no host command):
 
 ```sh
 docker pull   ghcr.io/crit-fumble/cfg-server-disrecord:v0.2.21
