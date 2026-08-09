@@ -106,6 +106,28 @@ export class ConsentManager {
    */
   private readonly pendingThreadPrompts = new Set<string>()
 
+  /**
+   * User ids we've already attempted to add to the recording thread —
+   * gates repeat `members.add` calls, since `noteSpeaker` fires on every
+   * speaking event, not just the first.
+   *
+   * Recorded on ATTEMPT, not on success: a member-add failure is almost
+   * always permanent (user left the guild, bot lost ManageThreads), so
+   * retrying it once per utterance would spend rate limit to no purpose.
+   * Failures are logged; the consent prompt's parent-channel fallback is
+   * what keeps such a user reachable.
+   */
+  private readonly threadMembersAdded = new Set<string>()
+
+  /**
+   * Thread-adds requested during the thread-creation window (thread
+   * expected, id not yet wired in). Flushed by {@link setThreadId},
+   * mirroring {@link pendingThreadPrompts} — a user who joins in that
+   * window must not be silently dropped from the thread just because
+   * they arrived before it existed.
+   */
+  private readonly pendingThreadMembers = new Set<string>()
+
   private readonly consentListeners: ConsentListener[] = []
   private readonly declineListeners: ConsentListener[] = []
 
@@ -162,16 +184,84 @@ export class ConsentManager {
   }
 
   /**
-   * Note a speaker from a voice-state / speaking event. A speaker we've
-   * never seen who isn't already consented/declined/pending gets a
-   * late-joiner consent prompt. Idempotent.
+   * Note a participant from a voice-state / speaking event — they are in
+   * the recorded call right now. Two independent consequences, in order:
+   *
+   *   1. THREAD MEMBERSHIP, unconditionally. Being in the room is the key
+   *      to the room's artifact. Session-start members are added by
+   *      `createRecordingThread`; this is the equivalent for anyone who
+   *      arrives later, and it is deliberately NOT gated on consent state.
+   *   2. A consent prompt, only when they have no decision yet.
+   *
+   * ⚠️ Step 1 must stay ABOVE the `seen` gate. It used to happen only as a
+   * side effect of prompting, inside `tryPostToThread` — so the one class
+   * of user who is never prompted was also never added: a holder of a
+   * persistent channel-level opt-in. `ConsentSync.seedFromPolicy` applies
+   * `applyConsent` for every such user at session start (whether or not
+   * they are even in the call), which marks them `seen` + `consented`, so a
+   * mid-session join returned at the first line and they silently lost
+   * access to the transcript and mp3 of a session they were recorded in.
+   * The most cooperative users were the ones locked out.
+   *
+   * Idempotent at both steps.
    */
   noteSpeaker(userId: string): void {
+    void this.ensureThreadMember(userId)
     if (this.seen.has(userId)) return
     this.seen.add(userId)
     if (this.consented.has(userId) || this.declined.has(userId) || this.pending.has(userId)) return
     this.pending.add(userId)
     void this.requestConsent(userId)
+  }
+
+  /**
+   * Add a user to the (private) recording thread so they can see the live
+   * transcript, the consent buttons, and the final mp3. Idempotent and
+   * best-effort — `members.add` succeeds for an existing member, and a
+   * failure never changes consent state or aborts the caller.
+   *
+   * During the thread-creation window the request is queued rather than
+   * dropped; {@link setThreadId} flushes it. With no thread at all (self-host,
+   * or creation failed) there is nothing to join and this is a no-op — the
+   * artifact lives in the parent channel those sessions already use.
+   */
+  private async ensureThreadMember(userId: string): Promise<void> {
+    if (this.threadMembersAdded.has(userId)) return
+    if (!this.threadId) {
+      if (this.threadExpected) this.pendingThreadMembers.add(userId)
+      return
+    }
+    this.threadMembersAdded.add(userId)
+    try {
+      const channel = await this.client.channels.fetch(this.threadId)
+      if (!channel || !('isThread' in channel) || !channel.isThread()) return
+      await channel.members.add(userId)
+    } catch (err) {
+      this.logger.warn(
+        { err, userId, threadId: this.threadId, recordingId: this.recordingId },
+        'failed to add participant to recording thread',
+      )
+    }
+  }
+
+  /**
+   * Record users as already in the thread so {@link ensureThreadMember}
+   * doesn't re-add them. Used for the members `createRecordingThread`
+   * invited at creation — it added them directly, without going through
+   * this manager.
+   */
+  markThreadMembers(ids: Iterable<string>): void {
+    for (const id of ids) this.threadMembersAdded.add(id)
+  }
+
+  /**
+   * Ensure a set of users are in the thread. Used on the thread-REUSE path
+   * (stop/restart within a session), where `createRecordingThread` never
+   * runs — so anyone who joined the call between the stop and the restart
+   * would otherwise never be added to the thread they're being recorded in.
+   */
+  addThreadMembers(ids: Iterable<string>): void {
+    for (const id of ids) void this.ensureThreadMember(id)
   }
 
   /**
@@ -203,6 +293,14 @@ export class ConsentManager {
   setThreadId(threadId: string | null): void {
     this.threadId = threadId
     this.threadExpected = false
+    // Flush queued thread-adds FIRST, so a queued prompt lands in a thread
+    // its recipient can already see. With `threadId === null` there is no
+    // thread to join — clear the queue rather than leaving it to grow.
+    const queuedMembers = Array.from(this.pendingThreadMembers)
+    this.pendingThreadMembers.clear()
+    if (threadId) {
+      for (const userId of queuedMembers) void this.ensureThreadMember(userId)
+    }
     const queued = Array.from(this.pendingThreadPrompts)
     this.pendingThreadPrompts.clear()
     // Re-issue each queued prompt now that the thread destination is known.
@@ -428,14 +526,14 @@ export class ConsentManager {
   ): Promise<boolean> {
     if (!this.threadId) return false
     try {
+      // Add the user first so they can see + click the prompt — private-
+      // thread messages are invisible to non-members. Delegated so the
+      // "already added" bookkeeping lives in one place; it swallows its own
+      // failures (user left the guild, no ManageThreads), which drops us to
+      // the parent-channel fallback rather than failing the consent flow.
+      await this.ensureThreadMember(userId)
       const channel = await this.client.channels.fetch(this.threadId)
       if (!channel || !('isThread' in channel) || !channel.isThread()) return false
-      // members.add succeeds even if they're already in the thread.
-      // Failure here (e.g. user left the guild) drops us to the
-      // parent-channel fallback rather than failing the consent flow.
-      await channel.members.add(userId).catch((err: unknown) =>
-        this.logger.warn({ err, userId, threadId: this.threadId }, 'failed to add user to recording thread'),
-      )
       if (!channel.isSendable()) return false
       await channel.send({ content, components })
       return true

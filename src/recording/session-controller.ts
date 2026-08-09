@@ -379,6 +379,10 @@ export class SessionController {
         this.logger.info({ recordingId: this.recordingId, reason }, 'ending recording — bot was removed from voice')
         void this.stop()
       },
+      // Late joiner is in the room — put them on core's participant roster.
+      // Unconditional, and separate from consent: the roster is what lets
+      // them reach this session's recording afterwards.
+      onParticipant: (userId) => this.reportParticipants([userId]),
       logger: this.logger,
     })
 
@@ -464,6 +468,21 @@ export class SessionController {
     // into the thread when non-null, or to the parent channel when thread
     // creation failed (null) — the genuine no-thread fallback.
     this.consent.setThreadId(this.threadId)
+
+    // Reconcile thread membership for the members we already know about.
+    // Two different jobs depending on how we got the thread:
+    //   - fresh thread → `createRecordingThread` already invited them, so
+    //     just record that, or the manager re-adds every one of them.
+    //   - REUSED thread → nothing invited anyone this start. Anyone who
+    //     joined the call between the previous stop and now is in the room
+    //     but not in the thread, so add them for real.
+    if (p.existingThreadId) this.consent.addThreadMembers(threadMembers)
+    else this.consent.markThreadMembers(threadMembers)
+
+    // Same list, other half of the fix: everyone in the room at start goes on
+    // core's participant roster. Late joiners are added as they arrive, via
+    // VoiceCapture's onParticipant.
+    this.reportParticipants(threadMembers)
 
     // Post the session-start announcement INSIDE the (private) thread —
     // pings the invoker (if any) + every voice member so they all get a
@@ -586,6 +605,17 @@ export class SessionController {
    * the core client is a no-op in self-host, and a failure only costs thread
    * reuse on the NEXT start, never this recording.
    */
+  /**
+   * Put a set of Discord users on core's participant roster for this
+   * session. No-op in self-host (no core to tell). Fire-and-forget: the
+   * client swallows its own failures, so this never delays voice handling
+   * or the start path.
+   */
+  private reportParticipants(discordUserIds: string[]): void {
+    if (!this.params.cfg) return
+    void this.params.core.postParticipants(discordUserIds)
+  }
+
   private async reportThread(threadId: string, parentChannelId: string | null): Promise<void> {
     if (!this.params.cfg) return
     await this.params.core.postRecordingThread(threadId, parentChannelId).catch((err: unknown) => {
