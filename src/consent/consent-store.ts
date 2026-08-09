@@ -109,7 +109,12 @@ export class FileConsentStore implements ConsentStore {
     status: PersistentConsentStatus,
   ): Promise<void> {
     const run = this.tail.then(async () => {
-      if (this.readOnlyBecauseCorrupt) return
+      // ⛔ The write lock is NOT checked here, deliberately. It is armed by
+      // `read()` BELOW, so a check at this point passed on the first decision
+      // of a process, the read then armed it and returned an empty document,
+      // and the write renamed that emptiness over the unreadable file —
+      // destroying every stored consent decision. The guard now lives in
+      // `write()`, the only place that can actually destroy anything.
       const file = await this.read()
       const key = channelKey(guildId, voiceChannelId)
       file.channels[key] = { ...(file.channels[key] ?? {}), [discordUserId]: status }
@@ -126,9 +131,19 @@ export class FileConsentStore implements ConsentStore {
     try {
       raw = await readFile(this.path, 'utf-8')
     } catch (err) {
-      // Missing file is the normal first-run state, not a problem.
+      // A MISSING file is the normal first-run state — writing is safe, because
+      // there is nothing to destroy.
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return { ...EMPTY, channels: {} }
-      this.logger.warn({ err, path: this.path }, 'consent store unreadable — continuing without stored consent')
+      // Present but unreadable (EACCES on a root-owned mount, EIO, a directory
+      // in its place) is the same danger as corrupt and gets the same lock:
+      // without it the next decision would rename an empty document over
+      // consent records we merely failed to read.
+      this.readOnlyBecauseCorrupt = true
+      this.logger.error(
+        { err, path: this.path },
+        'consent store exists but is unreadable — REFUSING to write it. Stored consent is ' +
+          'ignored this run; fix permissions or remove the file to restore persistence.',
+      )
       return { ...EMPTY, channels: {} }
     }
     try {
@@ -151,6 +166,17 @@ export class FileConsentStore implements ConsentStore {
   }
 
   private async write(file: ConsentFile): Promise<void> {
+    // ⛔ THE GUARD LIVES HERE — the only place that can destroy a consent
+    // record. It used to sit at the head of the write queue, which armed too
+    // late to help on a process's first decision. See the note in `set`.
+    if (this.readOnlyBecauseCorrupt) {
+      this.logger.error(
+        { path: this.path },
+        'consent write REFUSED — the file on disk could not be read and would be destroyed. ' +
+          'Fix or remove it to restore persistence.',
+      )
+      return
+    }
     const tmp = `${this.path}.tmp`
     try {
       await mkdir(dirname(this.path), { recursive: true })

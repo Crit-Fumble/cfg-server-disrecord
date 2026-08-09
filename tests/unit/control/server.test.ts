@@ -53,6 +53,27 @@ describe('control server', () => {
       expect(res.json()).toMatchObject({ ok: true, botReady: true })
     })
 
+    // ⛔ REGRESSION: percent-encoding the prefix used to skip auth entirely.
+    //
+    // Fastify decodes the path when ROUTING but leaves `req.url` as it arrived,
+    // so `GET /%76%31/recordings` reached the handler while a
+    // `req.url.startsWith('/v1/')` test said false. Every control route was
+    // callable with no credential — start a recording, stop someone else's,
+    // enumerate guilds. Worst CFG-hosted, where the container binds 0.0.0.0 and
+    // any neighbour on the docker network could reach it.
+    //
+    // The hook now keys off `routeOptions.url`, the decoded matched pattern.
+    it.each([
+      ['/%76%31/recordings', 'percent-encoded v1'],
+      ['/v%31/recordings', 'partially encoded'],
+      ['/%76%31/diagnostics', 'percent-encoded, another route'],
+    ])('rejects %s (%s) — encoding must not bypass auth', async (url) => {
+      app = await makeServer(fakeService(), 'secret')
+      const res = await app.inject({ method: 'GET', url })
+      // 401 (guarded) or 404 (no such route) are both fine. 200 is the bug.
+      expect([401, 404]).toContain(res.statusCode)
+    })
+
     it('rejects /v1/* without the bearer token when auth is enabled', async () => {
       app = await makeServer(fakeService(), 'secret')
       const res = await app.inject({ method: 'GET', url: '/v1/recordings' })

@@ -40,6 +40,13 @@
  *     That is what lets a self-hoster with no CFG account use the same file,
  *     and what keeps an export from carrying platform data off-platform.
  *
+ *     ONE deliberate exception: {@link AccessGrant.id} is an opaque key chosen
+ *     by whoever issued the grant, so on a platform-integrated instance it will
+ *     be a campaign or party id. It is not a credential and means nothing
+ *     without platform access, but it is foreign — so it appears only when
+ *     someone has opted into integration, never in the default minimal setup,
+ *     and grant MEMBERS are still Discord ids so the grant works without it.
+ *
  * {@link pickChannelSettings} is the enforcement point: an explicit allow-list,
  * never an object spread. Keep it that way — a spread would let a caller plant
  * a `discordToken` key and have it echoed straight back out of the export.
@@ -182,16 +189,23 @@ export function pickChannelSettings(input: unknown): ChannelSettings {
     switch (key) {
       case 'keywords':
       case 'keyterms':
+        // An EMPTY array is kept, and means "explicitly none". Dropping it
+        // would make it impossible for a scene to turn off keywords its world
+        // sets — the scene's `[]` would read as absent, and absent means
+        // inherit. Blank entries inside the array are still discarded.
         if (Array.isArray(value)) {
-          const strings = value.filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
-          if (strings.length > 0) out[key] = strings.map((s) => s.trim())
+          out[key] = value
+            .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+            .map((s) => s.trim())
         }
         break
       case 'transcriptionEnabled':
         if (typeof value === 'boolean') out[key] = value
         break
       default:
-        if (typeof value === 'string' && value.length > 0) out[key] = value
+        // Same reasoning for strings: `''` clears an inherited thread target or
+        // template. Only a non-string is rejected outright.
+        if (typeof value === 'string') out[key] = value
         break
     }
   }
@@ -277,6 +291,16 @@ function pickGrants(input: unknown): AccessGrant[] {
   return out
 }
 
+/** True when a world carries no configuration at all and is not worth storing. */
+function isEmptyWorld(world: GuildWorld): boolean {
+  return (
+    !world.name &&
+    Object.keys(world.defaults ?? {}).length === 0 &&
+    Object.keys(world.scenes ?? {}).length === 0 &&
+    (world.grants?.length ?? 0) === 0
+  )
+}
+
 /** Discord snowflake shape. Keys come from untrusted input, so validate them. */
 function isSnowflake(value: string): boolean {
   return /^\d{1,20}$/.test(value)
@@ -299,6 +323,22 @@ export function parseSettingsFile(input: unknown): DisrecordSettingsFile {
     if (world) file.worlds[guildId] = world
   }
   return file
+}
+
+/**
+ * A write did not reach disk. Thrown rather than swallowed so a route cannot
+ * answer 200 for a change that never persisted — "saved" when nothing was
+ * saved is worse than an error.
+ */
+export class SettingsWriteError extends Error {
+  constructor(
+    message: string,
+    /** `locked` — the file is unreadable and would be destroyed. `io` — the write itself failed. */
+    readonly reason: 'locked' | 'io',
+  ) {
+    super(message)
+    this.name = 'SettingsWriteError'
+  }
 }
 
 export interface SettingsStore {
@@ -335,12 +375,19 @@ export class FileSettingsStore implements SettingsStore {
   /** Write queue — every mutation chains onto the previous one. */
   private tail: Promise<void> = Promise.resolve()
   /**
-   * Set when the file exists but could not be parsed. Writes are then refused
-   * for the rest of the process's life, so a corrupt file is never overwritten
-   * and the operator's configuration is not destroyed by a bad parse. The
-   * container still runs; it just falls back to env defaults.
+   * Set when the file EXISTS but we could not turn it into a document —
+   * unparseable, or unreadable (EACCES on a root-owned bind mount, EIO, a
+   * directory in its place). Ordinary writes are then refused, because the
+   * alternative is renaming an empty document over configuration we merely
+   * failed to read.
+   *
+   * Cleared by a successful forced write (an import), which is the deliberate
+   * repair path — otherwise fixing the file would still leave the store locked
+   * until the container restarted.
+   *
+   * ⚠️ Enforced in {@link write}, NOT in the queue. See the note there.
    */
-  private readOnlyBecauseCorrupt = false
+  private writeLocked = false
 
   constructor(params: { path: string; logger: Logger }) {
     this.path = params.path
@@ -388,7 +435,13 @@ export class FileSettingsStore implements SettingsStore {
   async replaceAll(file: DisrecordSettingsFile): Promise<void> {
     return this.enqueue(async () => {
       // Normalize rather than trusting the caller — this is the upload path.
-      await this.write(parseSettingsFile(file))
+      //
+      // `force` deliberately: an import is the operator saying "replace
+      // everything with this", which is the documented way to RECOVER from an
+      // unreadable file. Blocking it would leave someone whose file got
+      // truncated with no route back except deleting it by hand. A partial
+      // mutation is a different thing entirely and stays guarded.
+      await this.write(parseSettingsFile(file), { force: true })
     })
   }
 
@@ -401,7 +454,12 @@ export class FileSettingsStore implements SettingsStore {
         scenes: Object.create(null) as Record<string, ChannelSettings>,
       }
       apply(world)
-      file.worlds[guildId] = world
+      // Don't leave an empty shell behind. Without this, DELETE-ing a scene on
+      // an unconfigured guild CREATED that guild's world — so the resource the
+      // request removed from sprang into existence, and `GET /v1/worlds/:id`
+      // flipped from 404 to 200 by virtue of a delete.
+      if (isEmptyWorld(world)) delete file.worlds[guildId]
+      else file.worlds[guildId] = world
       await this.write(file)
     })
   }
@@ -412,7 +470,13 @@ export class FileSettingsStore implements SettingsStore {
    */
   private enqueue(work: () => Promise<void>): Promise<void> {
     const run = this.tail.then(async () => {
-      if (this.readOnlyBecauseCorrupt) return
+      // ⛔ The write lock is NOT checked here, deliberately. It used to be, and
+      // that was a data-loss bug: the flag is only armed by `read()`, which runs
+      // INSIDE work(), so on the first operation of a process the check passed,
+      // the read then armed the flag and returned an empty document, and the
+      // write happily renamed that emptiness over the corrupt file. The guard
+      // only worked from the second operation onward. It now lives in `write()`,
+      // which is the only place that can actually destroy anything.
       await work()
     })
     // Keep the chain alive even if this write threw — one failure must not
@@ -426,36 +490,77 @@ export class FileSettingsStore implements SettingsStore {
     try {
       raw = await readFile(this.path, 'utf-8')
     } catch (err) {
-      // Missing file is the normal first-run state, not a problem.
+      // A MISSING file is the normal first-run state — writing is safe, because
+      // there is nothing to destroy.
       if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return emptySettingsFile()
-      this.logger.warn({ err, path: this.path }, 'settings store unreadable — continuing with env defaults')
+      // Anything else means the file is THERE and we could not read it —
+      // EACCES on a root-owned bind mount, EIO, a directory in its place. That
+      // is the same danger as a corrupt file and gets the same lock: without it,
+      // the next write would rename an empty document over configuration that
+      // was merely unreadable.
+      this.writeLocked = true
+      this.logger.error(
+        { err, path: this.path },
+        'settings store exists but is unreadable — REFUSING to write it. Running on env ' +
+          'defaults this run; fix permissions or remove the file to restore persistence.',
+      )
       return emptySettingsFile()
     }
     try {
       return parseSettingsFile(JSON.parse(raw))
     } catch (err) {
-      // Loud, and write-disabled: overwriting would destroy configuration we
-      // simply failed to read.
-      this.readOnlyBecauseCorrupt = true
+      this.writeLocked = true
       this.logger.error(
         { err, path: this.path },
         'settings store is corrupt — REFUSING to write it. Running on env defaults this run; ' +
-          'fix or remove the file to restore persistence.',
+          'fix or remove the file, or PUT /v1/settings/import a good copy.',
       )
       return emptySettingsFile()
     }
   }
 
-  private async write(file: DisrecordSettingsFile): Promise<void> {
+  /**
+   * Persist the document.
+   *
+   * ⛔ THIS is where the write lock is enforced — the only place that can
+   * actually destroy someone's configuration. Checking it any earlier is what
+   * produced the bug this replaced: the lock is armed by `read()`, so a check
+   * that ran before the read passed on the first operation of a process and let
+   * an empty document overwrite a corrupt file.
+   *
+   * @param force explicit whole-document replace (import). See `replaceAll`.
+   */
+  private async write(file: DisrecordSettingsFile, opts: { force?: boolean } = {}): Promise<void> {
+    if (this.writeLocked && !opts.force) {
+      this.logger.error(
+        { path: this.path },
+        'settings write REFUSED — the file on disk could not be read and would be destroyed. ' +
+          'Fix or remove it, or PUT /v1/settings/import to replace it deliberately.',
+      )
+      throw new SettingsWriteError(
+        'the settings file on disk is unreadable and would be destroyed by this write; ' +
+          'import a full document to replace it deliberately',
+        'locked',
+      )
+    }
+    // Write-then-rename, so a reader never sees a half-written document and a
+    // crash mid-write leaves the previous one intact. ⚠️ Not fsync'd: this
+    // buys ATOMICITY (no torn file), not durability against power loss, where
+    // the rename may be ordered before the data. Deliberate — the cost is a
+    // sync on every keystroke-sized save, and the worst case is losing the last
+    // change, not a corrupt document.
     const tmp = `${this.path}.tmp`
     try {
       await mkdir(dirname(this.path), { recursive: true })
       await writeFile(tmp, JSON.stringify(file, null, 2), 'utf-8')
       await rename(tmp, this.path)
+      // A forced write means the file is now known-good, so ordinary writes can
+      // resume — otherwise a successful repair would leave the store locked
+      // until the container restarted.
+      this.writeLocked = false
     } catch (err) {
-      // Best-effort: the running session already has what it needs in memory,
-      // only the memory across restarts is lost.
-      this.logger.warn({ err, path: this.path }, 'settings store write failed — change applies to this run only')
+      this.logger.error({ err, path: this.path }, 'settings store write FAILED — change did not persist')
+      throw new SettingsWriteError('settings could not be written to disk', 'io')
     }
   }
 }
