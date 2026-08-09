@@ -64,6 +64,23 @@ You need a Discord bot and (optionally) a Deepgram API key.
    into a thread, and writes a copy to `OUTPUT_DIR/<recordingId>/`. Want a
    `/resesh`-style slash UX? Build a bot that issues these control calls.
 
+### Remembered consent
+
+The consent prompt's **🔁 Yes, and remember** grants audio for this session
+*and* records a channel-level opt-in, so that speaker isn't prompted again in
+the same voice channel. **❌ Skip my voice** likewise records a channel-level
+opt-out — someone who has said no is not asked every week. **✅ Yes, this time
+only** deliberately remembers nothing.
+
+Self-host keeps this in a small JSON file at `$OUTPUT_DIR/consent-store.json`
+(override with `CONSENT_STORE_PATH`), so it lives on the volume you already
+mount for recordings — nothing extra to configure. Deleting the file just means
+everyone gets prompted again.
+
+If the file is ever unreadable the container says so loudly and **refuses to
+overwrite it**, running that session from memory instead: a failed parse must
+never destroy a consent record.
+
 ### Built-in dashboard (self-host only)
 
 Self-host serves a single-page control panel at `/` — pick a server and voice

@@ -24,6 +24,7 @@ import { ActiveTimeMeter } from './active-time-meter.js'
 import { RecordingSession, type TranscriptFinalEvent, type TranscriptInterimEvent } from './recording-session.js'
 import { buildDeepgramTokenProvider } from '../deepgram/index.js'
 import { ConsentManager } from '../consent/consent-manager.js'
+import { FileConsentStore, type ConsentStore } from '../consent/consent-store.js'
 import { processRecording } from './post-process.js'
 import { ChunkRecorder, type ChunkInfo } from './chunk-recorder.js'
 import { createRecordingThread, postChunk, postRecording, tempDirOf } from '../discord/thread-poster.js'
@@ -117,6 +118,12 @@ export interface SessionControllerParams {
    */
   cfg?: CfgHostedConfig
   /**
+   * Where SELF-HOST remembers channel-scoped consent, so "Yes, and remember"
+   * survives the session. Ignored when `cfg` is present — core owns persistent
+   * consent there.
+   */
+  consentStorePath: string
+  /**
    * Phone-home client. Always supplied; it is a no-op client when self-host
    * (see {@link CoreServerClient}). The controller only wires the
    * billing/consent/transcript paths when `cfg` is also present.
@@ -167,6 +174,12 @@ export class SessionController {
 
   /** CFG-hosted consent bridge — only constructed when `cfg` is present. */
   private consentSync: ConsentSync | null = null
+  /**
+   * SELF-HOST ONLY channel-scoped consent memory. Null when CFG-hosted, where
+   * core owns persistent consent — two writers would need reconciling, so
+   * exactly one is ever constructed. Same split as {@link consentSync}.
+   */
+  private consentStore: ConsentStore | null = null
   /** Billing-tick timer — only armed when `cfg` is present. */
   private billingTimer: NodeJS.Timeout | null = null
   /**
@@ -297,6 +310,19 @@ export class SessionController {
       logger: this.logger,
     })
 
+    // Self-host: remember channel-scoped decisions across sessions, which is
+    // what the "Yes, and remember" button has always claimed to do. The
+    // manager decides WHAT is worth remembering (core's rule, mirrored); this
+    // only writes it down. Never wired CFG-hosted — core's handleConsentButton
+    // is the writer there.
+    if (!p.cfg) {
+      const store = new FileConsentStore({ path: p.consentStorePath, logger: this.logger })
+      this.consentStore = store
+      this.consent.onPersistentDecision((userId, status) => {
+        void store.set(p.guildId, p.voiceChannelId, userId, status)
+      })
+    }
+
     this.pcmCapture = new PcmCapture({
       recordingId: this.recordingId,
       tempDir: this.tempDir,
@@ -338,6 +364,24 @@ export class SessionController {
         { consented: policy.consentedUserIds.length, keywords: policyKeywords.length, keyterms: policyKeyterms.length },
         'consent + keywords seeded from session policy',
       )
+    } else if (this.consentStore) {
+      // ── Self-host: the local store IS the session policy ──────────────────
+      // Same job as the CFG-hosted branch above — apply the decisions people
+      // have already made for this channel so they aren't re-prompted every
+      // session. Without it "Yes, and remember" remembered nothing, because
+      // core's webhook (the only writer) does not exist here.
+      try {
+        const stored = await this.consentStore.load(p.guildId, p.voiceChannelId)
+        for (const [userId, status] of stored) {
+          if (status === 'opted-in') this.consent.applyConsent(userId)
+          else this.consent.applyDecline(userId)
+        }
+        this.logger.info({ stored: stored.size }, 'consent seeded from local store')
+      } catch (err) {
+        // Never fail a recording over remembered preferences — everyone just
+        // gets prompted, which is the pre-store behaviour.
+        this.logger.warn({ err }, 'local consent seed failed — every speaker will be prompted')
+      }
     }
 
     this.session = new RecordingSession({
@@ -379,6 +423,10 @@ export class SessionController {
         this.logger.info({ recordingId: this.recordingId, reason }, 'ending recording — bot was removed from voice')
         void this.stop()
       },
+      // Late joiner is in the room — put them on core's participant roster.
+      // Unconditional, and separate from consent: the roster is what lets
+      // them reach this session's recording afterwards.
+      onParticipant: (userId) => this.reportParticipants([userId]),
       logger: this.logger,
     })
 
@@ -464,6 +512,21 @@ export class SessionController {
     // into the thread when non-null, or to the parent channel when thread
     // creation failed (null) — the genuine no-thread fallback.
     this.consent.setThreadId(this.threadId)
+
+    // Reconcile thread membership for the members we already know about.
+    // Two different jobs depending on how we got the thread:
+    //   - fresh thread → `createRecordingThread` already invited them, so
+    //     just record that, or the manager re-adds every one of them.
+    //   - REUSED thread → nothing invited anyone this start. Anyone who
+    //     joined the call between the previous stop and now is in the room
+    //     but not in the thread, so add them for real.
+    if (p.existingThreadId) this.consent.addThreadMembers(threadMembers)
+    else this.consent.markThreadMembers(threadMembers)
+
+    // Same list, other half of the fix: everyone in the room at start goes on
+    // core's participant roster. Late joiners are added as they arrive, via
+    // VoiceCapture's onParticipant.
+    this.reportParticipants(threadMembers)
 
     // Post the session-start announcement INSIDE the (private) thread —
     // pings the invoker (if any) + every voice member so they all get a
@@ -586,6 +649,17 @@ export class SessionController {
    * the core client is a no-op in self-host, and a failure only costs thread
    * reuse on the NEXT start, never this recording.
    */
+  /**
+   * Put a set of Discord users on core's participant roster for this
+   * session. No-op in self-host (no core to tell). Fire-and-forget: the
+   * client swallows its own failures, so this never delays voice handling
+   * or the start path.
+   */
+  private reportParticipants(discordUserIds: string[]): void {
+    if (!this.params.cfg) return
+    void this.params.core.postParticipants(discordUserIds)
+  }
+
   private async reportThread(threadId: string, parentChannelId: string | null): Promise<void> {
     if (!this.params.cfg) return
     await this.params.core.postRecordingThread(threadId, parentChannelId).catch((err: unknown) => {

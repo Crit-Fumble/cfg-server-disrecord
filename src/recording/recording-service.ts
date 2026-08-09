@@ -114,6 +114,7 @@ export class RecordingService {
       invokerUserId: req.invokerUserId,
       existingThreadId: req.threadId ?? null,
       cfg: this.config.cfg,
+      consentStorePath: this.config.consentStorePath,
       core: this.core,
       logger: this.logger.child({ recordingId }),
     })

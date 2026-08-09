@@ -26,8 +26,11 @@ import {
   type Interaction,
 } from 'discord.js'
 import type { Logger } from '../logger.js'
+import type { PersistentConsentStatus } from './consent-store.js'
 
 type ConsentListener = (userId: string) => void
+/** A decision that should outlive the session — see {@link ConsentManager.onPersistentDecision}. */
+type PersistentDecisionListener = (userId: string, status: PersistentConsentStatus) => void
 
 export interface ConsentManagerParams {
   recordingId: string
@@ -106,8 +109,31 @@ export class ConsentManager {
    */
   private readonly pendingThreadPrompts = new Set<string>()
 
+  /**
+   * User ids we've already attempted to add to the recording thread —
+   * gates repeat `members.add` calls, since `noteSpeaker` fires on every
+   * speaking event, not just the first.
+   *
+   * Recorded on ATTEMPT, not on success: a member-add failure is almost
+   * always permanent (user left the guild, bot lost ManageThreads), so
+   * retrying it once per utterance would spend rate limit to no purpose.
+   * Failures are logged; the consent prompt's parent-channel fallback is
+   * what keeps such a user reachable.
+   */
+  private readonly threadMembersAdded = new Set<string>()
+
+  /**
+   * Thread-adds requested during the thread-creation window (thread
+   * expected, id not yet wired in). Flushed by {@link setThreadId},
+   * mirroring {@link pendingThreadPrompts} — a user who joins in that
+   * window must not be silently dropped from the thread just because
+   * they arrived before it existed.
+   */
+  private readonly pendingThreadMembers = new Set<string>()
+
   private readonly consentListeners: ConsentListener[] = []
   private readonly declineListeners: ConsentListener[] = []
+  private readonly persistentDecisionListeners: PersistentDecisionListener[] = []
 
   /** Bound interaction handler — retained so it can be detached on stop(). */
   private readonly interactionHandler: (interaction: Interaction) => void
@@ -149,6 +175,42 @@ export class ConsentManager {
   }
 
   /**
+   * Register a callback for a decision that should OUTLIVE this session —
+   * i.e. one that belongs in a channel-scoped consent record.
+   *
+   * ⚠️ Wire this in SELF-HOST ONLY. CFG-hosted persists the same decision in
+   * core via `handleConsentButton`, and two writers would need reconciling.
+   */
+  onPersistentDecision(listener: PersistentDecisionListener): void {
+    this.persistentDecisionListeners.push(listener)
+  }
+
+  /**
+   * Decide whether a click is worth remembering, then fan it out.
+   *
+   * The rule is core's `handleConsentButton`, copied deliberately rather than
+   * re-derived — a self-hoster and a CFG user reading the same button label
+   * must get the same behaviour:
+   *
+   *   - decline                → ALWAYS persists opt-out (don't re-prompt someone
+   *                              who has said no)
+   *   - consent + remember     → persists opt-in
+   *   - consent, this time only → persists NOTHING; they get re-prompted
+   */
+  private emitPersistentDecision(userId: string, action: 'consent' | 'decline', remember: boolean): void {
+    const consented = action === 'consent'
+    if (consented && !remember) return
+    const status: PersistentConsentStatus = consented ? 'opted-in' : 'opted-out'
+    for (const fn of this.persistentDecisionListeners) {
+      try {
+        fn(userId, status)
+      } catch (err) {
+        this.logger.warn({ err, userId, status }, 'persistent-decision listener threw')
+      }
+    }
+  }
+
+  /**
    * Mark a set of users as "pending" — no prompt fires when they speak.
    * Used to pre-seed everyone in voice at start so the initial prompt
    * doesn't get double-posted via the late-joiner path.
@@ -162,16 +224,84 @@ export class ConsentManager {
   }
 
   /**
-   * Note a speaker from a voice-state / speaking event. A speaker we've
-   * never seen who isn't already consented/declined/pending gets a
-   * late-joiner consent prompt. Idempotent.
+   * Note a participant from a voice-state / speaking event — they are in
+   * the recorded call right now. Two independent consequences, in order:
+   *
+   *   1. THREAD MEMBERSHIP, unconditionally. Being in the room is the key
+   *      to the room's artifact. Session-start members are added by
+   *      `createRecordingThread`; this is the equivalent for anyone who
+   *      arrives later, and it is deliberately NOT gated on consent state.
+   *   2. A consent prompt, only when they have no decision yet.
+   *
+   * ⚠️ Step 1 must stay ABOVE the `seen` gate. It used to happen only as a
+   * side effect of prompting, inside `tryPostToThread` — so the one class
+   * of user who is never prompted was also never added: a holder of a
+   * persistent channel-level opt-in. `ConsentSync.seedFromPolicy` applies
+   * `applyConsent` for every such user at session start (whether or not
+   * they are even in the call), which marks them `seen` + `consented`, so a
+   * mid-session join returned at the first line and they silently lost
+   * access to the transcript and mp3 of a session they were recorded in.
+   * The most cooperative users were the ones locked out.
+   *
+   * Idempotent at both steps.
    */
   noteSpeaker(userId: string): void {
+    void this.ensureThreadMember(userId)
     if (this.seen.has(userId)) return
     this.seen.add(userId)
     if (this.consented.has(userId) || this.declined.has(userId) || this.pending.has(userId)) return
     this.pending.add(userId)
     void this.requestConsent(userId)
+  }
+
+  /**
+   * Add a user to the (private) recording thread so they can see the live
+   * transcript, the consent buttons, and the final mp3. Idempotent and
+   * best-effort — `members.add` succeeds for an existing member, and a
+   * failure never changes consent state or aborts the caller.
+   *
+   * During the thread-creation window the request is queued rather than
+   * dropped; {@link setThreadId} flushes it. With no thread at all (self-host,
+   * or creation failed) there is nothing to join and this is a no-op — the
+   * artifact lives in the parent channel those sessions already use.
+   */
+  private async ensureThreadMember(userId: string): Promise<void> {
+    if (this.threadMembersAdded.has(userId)) return
+    if (!this.threadId) {
+      if (this.threadExpected) this.pendingThreadMembers.add(userId)
+      return
+    }
+    this.threadMembersAdded.add(userId)
+    try {
+      const channel = await this.client.channels.fetch(this.threadId)
+      if (!channel || !('isThread' in channel) || !channel.isThread()) return
+      await channel.members.add(userId)
+    } catch (err) {
+      this.logger.warn(
+        { err, userId, threadId: this.threadId, recordingId: this.recordingId },
+        'failed to add participant to recording thread',
+      )
+    }
+  }
+
+  /**
+   * Record users as already in the thread so {@link ensureThreadMember}
+   * doesn't re-add them. Used for the members `createRecordingThread`
+   * invited at creation — it added them directly, without going through
+   * this manager.
+   */
+  markThreadMembers(ids: Iterable<string>): void {
+    for (const id of ids) this.threadMembersAdded.add(id)
+  }
+
+  /**
+   * Ensure a set of users are in the thread. Used on the thread-REUSE path
+   * (stop/restart within a session), where `createRecordingThread` never
+   * runs — so anyone who joined the call between the stop and the restart
+   * would otherwise never be added to the thread they're being recorded in.
+   */
+  addThreadMembers(ids: Iterable<string>): void {
+    for (const id of ids) void this.ensureThreadMember(id)
   }
 
   /**
@@ -203,6 +333,14 @@ export class ConsentManager {
   setThreadId(threadId: string | null): void {
     this.threadId = threadId
     this.threadExpected = false
+    // Flush queued thread-adds FIRST, so a queued prompt lands in a thread
+    // its recipient can already see. With `threadId === null` there is no
+    // thread to join — clear the queue rather than leaving it to grow.
+    const queuedMembers = Array.from(this.pendingThreadMembers)
+    this.pendingThreadMembers.clear()
+    if (threadId) {
+      for (const userId of queuedMembers) void this.ensureThreadMember(userId)
+    }
     const queued = Array.from(this.pendingThreadPrompts)
     this.pendingThreadPrompts.clear()
     // Re-issue each queued prompt now that the thread destination is known.
@@ -428,14 +566,14 @@ export class ConsentManager {
   ): Promise<boolean> {
     if (!this.threadId) return false
     try {
+      // Add the user first so they can see + click the prompt — private-
+      // thread messages are invisible to non-members. Delegated so the
+      // "already added" bookkeeping lives in one place; it swallows its own
+      // failures (user left the guild, no ManageThreads), which drops us to
+      // the parent-channel fallback rather than failing the consent flow.
+      await this.ensureThreadMember(userId)
       const channel = await this.client.channels.fetch(this.threadId)
       if (!channel || !('isThread' in channel) || !channel.isThread()) return false
-      // members.add succeeds even if they're already in the thread.
-      // Failure here (e.g. user left the guild) drops us to the
-      // parent-channel fallback rather than failing the consent flow.
-      await channel.members.add(userId).catch((err: unknown) =>
-        this.logger.warn({ err, userId, threadId: this.threadId }, 'failed to add user to recording thread'),
-      )
       if (!channel.isSendable()) return false
       await channel.send({ content, components })
       return true
@@ -462,12 +600,16 @@ export class ConsentManager {
     if (!interaction.isButton()) return
     const [action, key] = interaction.customId.split(':')
     if (key !== this.buttonKey) return
-    // `consent_remember` collapses to the same applyConsent on the
-    // container side — the persistent opt-in DB write is core-server's
-    // job in handleConsentButton. Both grant audio for THIS session.
-    const normalized = action === 'consent_remember' ? 'consent' : action
+    // `consent_remember` grants audio for THIS session exactly like `consent`
+    // — but the two differ in what OUTLIVES the session, so the distinction is
+    // carried through rather than collapsed here. CFG-hosted persists it in
+    // core (`handleConsentButton`); self-host persists it via the
+    // persistent-decision listener. It used to be flattened at this line,
+    // which is why "Yes, and remember" did nothing at all in self-host.
+    const remember = action === 'consent_remember'
+    const normalized = remember ? 'consent' : action
     if (normalized !== 'consent' && normalized !== 'decline') return
-    void this.handleConsentInteraction(interaction, normalized as 'consent' | 'decline')
+    void this.handleConsentInteraction(interaction, normalized as 'consent' | 'decline', remember)
   }
 
   /**
@@ -481,6 +623,7 @@ export class ConsentManager {
   private async handleConsentInteraction(
     interaction: Interaction,
     action: 'consent' | 'decline',
+    remember = false,
   ): Promise<void> {
     if (!interaction.isButton()) return
     const userId = interaction.user.id
@@ -500,6 +643,7 @@ export class ConsentManager {
       // the user got no confirmation.
       if (action === 'consent') this.applyConsent(userId)
       else this.applyDecline(userId)
+      this.emitPersistentDecision(userId, action, remember)
       return
     }
 
@@ -511,6 +655,7 @@ export class ConsentManager {
         this.applyDecline(userId)
         this.logger.info({ recordingId: this.recordingId, userId }, 'consent applied (decline)')
       }
+      this.emitPersistentDecision(userId, action, remember)
     } catch (err) {
       this.logger.error({ err, userId, recordingId: this.recordingId }, 'applyConsent threw')
     }

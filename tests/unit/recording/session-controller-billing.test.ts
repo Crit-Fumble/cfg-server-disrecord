@@ -59,6 +59,8 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
   tempDirOf: jest.fn(() => '/tmp'),
 }))
 
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { SessionController, type SessionControllerParams } from '../../../src/recording/session-controller.js'
 import type { CfgHostedConfig } from '../../../src/config.js'
 
@@ -122,6 +124,7 @@ function baseParams(core: FakeCore, cfg: CfgHostedConfig | undefined): SessionCo
     deepgramModel: 'nova-3',
     deepgramLanguage: 'en',
     chunkMinutes: 0,
+    consentStorePath: join(tmpdir(), 'disrecord-test-consent.json'),
     sink: {} as never,
     cfg,
     core: core as never,
