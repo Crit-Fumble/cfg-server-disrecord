@@ -16,10 +16,9 @@
  *   GET    /v1/settings/export                     the whole document, as a download
  *   PUT    /v1/settings/import                     replace the whole document
  *
- * ⚠️ NOTHING READS THESE SETTINGS YET. This step gives the document a surface;
- * the recording path still takes its keywords from the CFG session policy and
- * names threads itself. Wiring `session-controller` to the store is the next
- * step — until it lands, a configured value is stored faithfully and ignored.
+ * `keywords`, `keyterms` and `threadNameTemplate` are LIVE — the session
+ * controller resolves them per recording and they win over the platform's
+ * session policy. The rest are stored faithfully and not yet read.
  *
  * ## PUT, not PATCH
  *

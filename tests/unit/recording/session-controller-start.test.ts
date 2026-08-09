@@ -86,6 +86,7 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
 }))
 
 import { tmpdir } from 'node:os'
+import { testSettingsStore } from '../../_lib/settings.js'
 import { join } from 'node:path'
 import { SessionController, type SessionControllerParams } from '../../../src/recording/session-controller.js'
 import { ConsentManager } from '../../../src/consent/consent-manager.js'
@@ -149,6 +150,7 @@ function baseParams(overrides: Partial<SessionControllerParams> = {}): SessionCo
     deepgramLanguage: 'en',
     chunkMinutes: 0,
     consentStorePath: join(tmpdir(), 'disrecord-test-consent.json'),
+    settingsStore: testSettingsStore(),
     sink: {} as never,
     core: fakeCore(),
     logger: silentLogger,

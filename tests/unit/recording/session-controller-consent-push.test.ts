@@ -56,6 +56,7 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
 }))
 
 import { tmpdir } from 'node:os'
+import { testSettingsStore } from '../../_lib/settings.js'
 import { join } from 'node:path'
 import {
   SessionController,
@@ -117,6 +118,7 @@ function baseParams(cfg: CfgHostedConfig | undefined): SessionControllerParams {
     deepgramLanguage: 'en',
     chunkMinutes: 0,
     consentStorePath: join(tmpdir(), 'disrecord-test-consent.json'),
+    settingsStore: testSettingsStore(),
     sink: {} as never,
     cfg,
     core: fakeCore(),

@@ -25,6 +25,7 @@ import { RecordingSession, type TranscriptFinalEvent, type TranscriptInterimEven
 import { buildDeepgramTokenProvider } from '../deepgram/index.js'
 import { ConsentManager } from '../consent/consent-manager.js'
 import { FileConsentStore, type ConsentStore } from '../consent/consent-store.js'
+import type { ChannelSettings, SettingsStore } from '../settings/settings-store.js'
 import { processRecording } from './post-process.js'
 import { ChunkRecorder, type ChunkInfo } from './chunk-recorder.js'
 import { createRecordingThread, postChunk, postRecording, tempDirOf } from '../discord/thread-poster.js'
@@ -123,6 +124,11 @@ export interface SessionControllerParams {
    * consent there.
    */
   consentStorePath: string
+  /**
+   * The container's own guild/channel settings, resolved per recording.
+   * READ-ONLY here — the control API owns writes.
+   */
+  settingsStore: SettingsStore
   /**
    * Phone-home client. Always supplied; it is a no-op client when self-host
    * (see {@link CoreServerClient}). The controller only wires the
@@ -351,6 +357,18 @@ export class SessionController {
     //      jargon, etc. Earlier the policy was fetched by consent-sync but
     //      only consentedUserIds were consumed; the keyword fields were
     //      thrown away.
+    // ── The container's OWN settings for this channel ──────────────────────
+    // Scene over world defaults, field by field. Resolved before the policy so
+    // the merge below can prefer them.
+    let channelSettings: ChannelSettings = {}
+    try {
+      channelSettings = await p.settingsStore.effective(p.guildId, p.voiceChannelId)
+    } catch (err) {
+      // Never fail a recording over configuration — fall back to whatever the
+      // platform (or env) supplies, which is exactly the pre-settings behaviour.
+      this.logger.warn({ err }, 'settings lookup failed — falling back to session policy / env defaults')
+    }
+
     let policyKeywords: string[] = []
     let policyKeyterms: string[] = []
     if (p.cfg) {
@@ -389,8 +407,18 @@ export class SessionController {
       deepgramModel: p.deepgramModel,
       language: p.deepgramLanguage,
       consentedUserIds: this.consent.consentedIds(),
-      keywords: policyKeywords,
-      keyterms: policyKeyterms,
+      // The container's own settings WIN over the platform's session policy —
+      // this file is the source of truth for operational config, and the policy
+      // is the older path that still supplies the consent set.
+      //
+      // `??`, not `||` — though for ARRAYS the two agree, because `[]` is
+      // truthy in JS. The distinction is deliberate anyway: this merge shape
+      // extends to the boolean and string settings next to it, where `||`
+      // silently loses a configured `false` or `''` and inherits the platform's
+      // value instead. Using the operator that means "only when absent" keeps
+      // that from being a trap for whoever adds the next field.
+      keywords: channelSettings.keywords ?? policyKeywords,
+      keyterms: channelSettings.keyterms ?? policyKeyterms,
       resolveSpeakerName: (userId) => this.resolveSpeakerName(userId),
       onTranscriptFinal: (event: TranscriptFinalEvent) => this.onTranscript(event),
       onTranscriptInterim: (event: TranscriptInterimEvent) => this.onInterim(event),
@@ -502,6 +530,9 @@ export class SessionController {
         p.transcription,
         threadMembers,
         this.logger,
+        // The operator's own template, when they set one. Absent keeps the
+        // built-in `<voice> - <date> - <kind>`.
+        channelSettings.threadNameTemplate,
       )
       // Report it home so core-server can hand it back on the next start (and
       // address the thread itself). No-op in self-host.
