@@ -98,6 +98,7 @@ function baseParams(): SessionControllerParams {
       postTranscript: jest.fn(),
       postBillingTick: jest.fn(async () => ({ insufficientCoins: false })),
       postRecordingThread: jest.fn(async () => undefined),
+      postParticipants: jest.fn(async () => undefined),
     } as never,
     logger: silentLogger,
   }

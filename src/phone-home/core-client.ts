@@ -183,6 +183,47 @@ export class CoreServerClient {
   }
 
   /**
+   * Report who is in the recorded voice channel — at session start, and
+   * again as late joiners arrive.
+   *
+   * PRESENCE ONLY. The payload is a list of Discord user ids and nothing
+   * else: core resolves each one's consent state from its own persistent
+   * records and writes the row. Consent is a legally meaningful artifact
+   * and the worker is a lower tier, so it reports the fact it observed
+   * ("this person is in the room") and never authors the decision — the
+   * same boundary the billing split follows, where the worker meters and
+   * core prices.
+   *
+   * Why it exists: core's only participant rows for a worker-run session
+   * came from people *interacting* with a consent control, so anyone
+   * carrying a persistent channel opt-in was recorded while remaining
+   * invisible as a participant. `collectConsent` used to seed a row per
+   * member at start, but it has had no caller since recording moved into
+   * this worker.
+   *
+   * Best-effort, like every other report here: a failure costs roster
+   * completeness, never the recording in progress.
+   */
+  async postParticipants(discordUserIds: string[]): Promise<void> {
+    if (!this.cfg) return
+    const unique = Array.from(new Set(discordUserIds.filter((id) => typeof id === 'string' && id.length > 0)))
+    if (unique.length === 0) return
+    const url = this.url('/api/v1/recording/participants')
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ installationId: this.cfg.installationId, discordUserIds: unique }),
+      })
+      if (!res.ok) {
+        this.logger?.warn({ status: res.status, count: unique.length }, 'participants POST non-2xx')
+      }
+    } catch (err) {
+      this.logger?.warn({ err, count: unique.length }, 'participants POST threw')
+    }
+  }
+
+  /**
    * Fetch a short-lived Deepgram grant token for platform-mode transcription.
    *
    * Returns `null` when self-host (no `cfg`) or when core-server is

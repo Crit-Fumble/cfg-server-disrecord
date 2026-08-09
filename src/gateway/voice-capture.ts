@@ -93,6 +93,15 @@ export interface VoiceCaptureParams {
    * rejoined. Absent ⇒ the capture just stands down without ending anything.
    */
   onExplicitDisconnect?: (reason: string) => void
+  /**
+   * Called when a non-bot user JOINS the recorded voice channel — "this
+   * person is in the room". Distinct from consent: it fires for late
+   * joiners regardless of their decision, because presence is what makes
+   * someone a participant in the session.
+   *
+   * Absent ⇒ nobody is told (self-host, which has no core-server to tell).
+   */
+  onParticipant?: (userId: string) => void
   logger: Logger
 }
 
@@ -226,6 +235,10 @@ export class VoiceCapture {
         if (!userId) return
         logger.info({ userId, voiceChannelId }, 'voice-join detected — prompting consent')
         this.params.consent.noteSpeaker(userId)
+        // Presence is reported separately from consent, and unconditionally:
+        // core's participant roster must include the people who never touch
+        // a consent control (persistent opt-in holders above all).
+        this.params.onParticipant?.(userId)
       } catch (err) {
         logger.warn({ err }, 'voiceStateUpdate listener threw')
       }

@@ -129,6 +129,7 @@ function fakeCore(): CoreServerClient {
     postTranscript: jest.fn(),
     postBillingTick: jest.fn(),
     postRecordingThread: jest.fn(async () => {}),
+    postParticipants: jest.fn(async () => {}),
   } as never
 }
 
