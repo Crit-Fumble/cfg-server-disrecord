@@ -74,6 +74,18 @@ export interface StandaloneConfig {
    */
   consentStorePath: string
   /**
+   * Where this container's own guild/channel settings live — the Foundry-shaped
+   * world/scene document (`src/settings/settings-store.ts`).
+   *
+   * Defaults OUTSIDE `outputDir`, unlike the consent store: recordings are the
+   * artifact a user syncs, prunes or hands to someone else, and configuration
+   * should not be swept along with them. `/data` is the writable bind either
+   * way — ⚠️ never default this under `/app`, which is read-only rootfs.
+   *
+   * Override with `DISRECORD_SETTINGS_PATH`.
+   */
+  settingsPath: string
+  /**
    * Real-time mp3 chunking cadence in minutes (#131). `0` (the default)
    * disables chunking — the session behaves exactly as before, producing only
    * the whole-session mp3 at stop(). When `> 0`, a chunk mp3 covering the last
@@ -268,6 +280,7 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     deepgramLanguage: optionalEnv('DEEPGRAM_LANGUAGE', 'en'),
     outputDir: outputDir,
     consentStorePath: optionalEnv('CONSENT_STORE_PATH', `${outputDir}/consent-store.json`),
+    settingsPath: optionalEnv('DISRECORD_SETTINGS_PATH', '/data/disrecord/worlds.json'),
     keepPcm: keepPcmRequested && cfg == null,
     controlPort,
     controlToken: process.env.CONTROL_TOKEN || undefined,
