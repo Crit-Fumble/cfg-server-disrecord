@@ -84,8 +84,23 @@ export async function startControlServer(params: ControlServerParams): Promise<F
 
   // Auth — applied to every /v1/* route. `/healthz` stays open so core-server
   // (and Docker healthchecks) can poll readiness before they hold a token.
+  //
+  // ⛔ MATCH ON THE ROUTE PATTERN, NEVER ON `req.url`.
+  //
+  // Fastify decodes the path when ROUTING but leaves `req.url` exactly as it
+  // arrived. So `GET /%76%31/recordings` routed to `/v1/recordings` while
+  // `req.url.startsWith('/v1/')` was FALSE — the hook returned early and the
+  // handler ran with no auth at all. That was an unauthenticated bypass of
+  // every control route: start a recording, stop someone else's, enumerate
+  // guilds and channels. It mattered most CFG-hosted, where the container binds
+  // 0.0.0.0 and any neighbour on the docker network could reach it.
+  //
+  // `routeOptions.url` is the matched pattern — already decoded, already
+  // canonical, and immune to any encoding trick that still routes here. It is
+  // `undefined` when nothing matched, which is a 404 with no handler to guard.
   app.addHook('onRequest', async (req, reply) => {
-    if (!req.url.startsWith('/v1/')) return
+    const routePattern = req.routeOptions?.url
+    if (!routePattern || !routePattern.startsWith('/v1/')) return
     const result = await authenticate(req.headers.authorization)
     if (!result.ok) {
       logger.warn({ url: req.url, reason: result.reason }, 'control: request rejected')

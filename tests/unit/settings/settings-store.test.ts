@@ -14,7 +14,7 @@
  *      simultaneous saves.
  */
 
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -23,6 +23,7 @@ import {
   pickChannelSettings,
   parseSettingsFile,
   emptySettingsFile,
+  SettingsWriteError,
   CHANNEL_SETTINGS_KEYS,
   type GuildWorld,
 } from '../../../src/settings/settings-store.js'
@@ -117,6 +118,15 @@ describe('pickChannelSettings — the allow-list boundary', () => {
     })
   })
 
+  it('KEEPS an empty array and an empty string — "explicitly none", not absent', () => {
+    // Dropping these made it impossible for a scene to turn OFF something its
+    // world sets: the scene's `[]` read as absent, and absent means inherit.
+    expect(pickChannelSettings({ keywords: [], outputThreadId: '' })).toEqual({
+      keywords: [],
+      outputThreadId: '',
+    })
+  })
+
   it('treats null and undefined as absent, not as values', () => {
     expect(pickChannelSettings({ keywords: null, outputChannelId: undefined })).toEqual({})
   })
@@ -176,6 +186,16 @@ describe('effectiveSettings — scene over world, field by field', () => {
 
   it('returns empty for an unknown world', () => {
     expect(effectiveSettings(undefined, CHANNEL)).toEqual({})
+  })
+
+  it('lets a scene clear an inherited list with an empty array', () => {
+    const w: GuildWorld = {
+      defaults: { keywords: ['world-kw'] },
+      scenes: { [CHANNEL]: { keywords: [] } },
+    }
+    // The point of keeping `[]`: this channel wants NO keyword boosts, even
+    // though its world configures some.
+    expect(effectiveSettings(w, CHANNEL).keywords).toEqual([])
   })
 })
 
@@ -287,17 +307,58 @@ describe('FileSettingsStore', () => {
     expect(await readFile(path, 'utf-8')).not.toContain('PLANTED')
   })
 
-  it('REFUSES to overwrite a corrupt file, and says so loudly', async () => {
+  it('REFUSES to overwrite a corrupt file when the FIRST operation is a write', async () => {
     await writeFile(path, '{ not json at all', 'utf-8')
     const logger = makeLogger()
     const store = new FileSettingsStore({ path, logger })
 
-    expect((await store.load()).worlds).toEqual({})
-    await store.setScene(GUILD, CHANNEL, { keywords: ['x'] })
+    // ⚠️ No read first. That ordering is the whole test: the guard used to be
+    // checked at the head of the write queue, but it is only ARMED by a read —
+    // so the first operation of a process sailed past it, read an empty
+    // document, and renamed that emptiness over the operator's config.
+    // The original version of this test called load() here and passed while
+    // that bug was live.
+    await expect(store.setScene(GUILD, CHANNEL, { keywords: ['x'] })).rejects.toThrow(SettingsWriteError)
 
-    // The operator's file is untouched — a failed parse must not destroy config.
     expect(await readFile(path, 'utf-8')).toBe('{ not json at all')
     expect((logger as unknown as { error: jest.Mock }).error).toHaveBeenCalled()
+  })
+
+  it('REFUSES to overwrite a file that exists but cannot be read', async () => {
+    await writeFile(path, '{"version":1,"worlds":{}}', 'utf-8')
+    await chmod(path, 0o000)
+    const store = new FileSettingsStore({ path, logger: makeLogger() })
+
+    // Unreadable is the same danger as unparseable — an EACCES bind mount must
+    // not be silently replaced with an empty document.
+    await expect(store.setScene(GUILD, CHANNEL, { keywords: ['x'] })).rejects.toThrow(SettingsWriteError)
+
+    await chmod(path, 0o600)
+    expect(await readFile(path, 'utf-8')).toBe('{"version":1,"worlds":{}}')
+  })
+
+  it('an explicit import CAN replace a corrupt file — the repair path', async () => {
+    await writeFile(path, '{ not json at all', 'utf-8')
+    const store = new FileSettingsStore({ path, logger: makeLogger() })
+
+    // Refusing this too would leave an operator whose file got truncated with
+    // no way back except deleting it by hand.
+    await store.replaceAll({
+      version: 1,
+      worlds: { [GUILD]: { defaults: { keywords: ['restored'] }, scenes: {} } },
+    })
+    expect((await store.world(GUILD))?.defaults.keywords).toEqual(['restored'])
+
+    // ...and ordinary writes work again afterwards, rather than staying locked
+    // until the container restarts.
+    await store.setScene(GUILD, CHANNEL, { keywords: ['after'] })
+    expect((await store.effective(GUILD, CHANNEL)).keywords).toEqual(['after'])
+  })
+
+  it('surfaces an I/O failure instead of reporting success', async () => {
+    // A directory where the file should be: open() fails with EISDIR.
+    const store = new FileSettingsStore({ path: dir, logger: makeLogger() })
+    await expect(store.setScene(GUILD, CHANNEL, { keywords: ['x'] })).rejects.toThrow(SettingsWriteError)
   })
 
   it('replaceAll normalizes the uploaded document', async () => {

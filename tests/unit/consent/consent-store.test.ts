@@ -6,7 +6,7 @@
  * people clicking at the same instant.
  */
 
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { FileConsentStore } from '../../../src/consent/consent-store.js'
@@ -93,18 +93,37 @@ describe('FileConsentStore', () => {
     expect(loaded.get('user-3')).toBe('opted-out')
   })
 
-  it('REFUSES to overwrite a corrupt file, and says so loudly', async () => {
+  it('REFUSES to overwrite a corrupt file when the FIRST operation is a write', async () => {
     await writeFile(path, '{ this is not json', 'utf-8')
     const logger = makeLogger()
     const store = new FileConsentStore({ path, logger })
 
-    expect((await store.load(GUILD, CHANNEL)).size).toBe(0)
+    // ⚠️ No read first. That ordering is the whole test: the guard used to be
+    // checked at the head of the write queue, but it is only ARMED by a read —
+    // so the first decision of a process sailed past it, read an empty
+    // document, and renamed that emptiness over every stored consent record.
+    // The original version of this test called load() here and passed while
+    // that bug was live.
     await store.set(GUILD, CHANNEL, 'user-1', 'opted-in')
 
     // The operator's file is still exactly as they left it — a failed parse
     // must never destroy a consent record.
     expect(await readFile(path, 'utf-8')).toBe('{ this is not json')
     expect((logger as unknown as { error: jest.Mock }).error).toHaveBeenCalled()
+  })
+
+  it('REFUSES to overwrite a file that exists but cannot be read', async () => {
+    await writeFile(path, JSON.stringify({ version: 1, channels: {} }), 'utf-8')
+    await chmod(path, 0o000)
+    const store = new FileConsentStore({ path, logger: makeLogger() })
+
+    // Unreadable is the same danger as unparseable — an EACCES bind mount must
+    // not be silently replaced with an empty document. Only a PARSE failure
+    // used to arm the lock, so this case lost every stored decision.
+    await store.set(GUILD, CHANNEL, 'user-1', 'opted-in')
+
+    await chmod(path, 0o600)
+    expect(await readFile(path, 'utf-8')).toBe(JSON.stringify({ version: 1, channels: {} }))
   })
 
   it('ignores unrecognised status values rather than trusting them', async () => {
