@@ -144,14 +144,20 @@ Settable per world or per channel: `keywords`, `keyterms`,
 `transcriptionEnabled`, `deepgramModel`, `deepgramLanguage`, `outputChannelId`,
 `outputThreadId`, `threadNameTemplate`.
 
-⚠️ **Not yet consumed by recordings.** The document, its API and its
-persistence are real; the recording path still reads keywords from the platform
-session policy and names threads itself. Configure freely — values are stored
-faithfully — but expect them to take effect only once the recording path is
-wired to the store.
-
 Absent means *inherit*; an empty array or empty string means *explicitly none*,
 so a channel can switch off keywords its world sets.
+
+`keywords` and `keyterms` are applied to the next recording in that channel, and
+**the container's own settings win** over anything the platform supplies —
+self-host gets per-channel Deepgram boosts for the first time.
+
+`threadNameTemplate` names the recording thread. Tokens are `{{voiceChannel}}`,
+`{{date}}` and `{{kind}}` (`Recording` or `Transcription`); anything else is
+left verbatim, so a typo shows up in the title instead of vanishing. Unset keeps
+the built-in `<voice channel> - <date> - <kind>`.
+
+The remaining fields are stored faithfully but not yet read by the recording
+path.
 
 A scene read returns **both** `effective` (what a recording will actually use)
 and `override` (only what this channel sets itself) — rendering the resolved

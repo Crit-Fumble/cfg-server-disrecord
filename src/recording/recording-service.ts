@@ -14,6 +14,7 @@ import { nanoid } from './nanoid.js'
 import { SessionController } from './session-controller.js'
 import { SessionRegistry, GuildConflictError, SessionNotFoundError } from './session-registry.js'
 import { CoreServerClient } from '../phone-home/core-client.js'
+import type { SettingsStore } from '../settings/settings-store.js'
 import type { Client } from 'discord.js'
 import type { OutputSink } from './output-sink.js'
 import type { StandaloneConfig } from '../config.js'
@@ -54,6 +55,11 @@ export class RecordingService {
     private readonly sink: OutputSink,
     private readonly config: StandaloneConfig,
     private readonly logger: Logger,
+    /**
+     * The container's own guild/channel settings. READ-ONLY here — writes go
+     * through the control API, which holds the same instance.
+     */
+    private readonly settingsStore: SettingsStore,
   ) {
     this.core = new CoreServerClient(config.cfg, logger.child({ module: 'core-client' }))
   }
@@ -115,6 +121,7 @@ export class RecordingService {
       existingThreadId: req.threadId ?? null,
       cfg: this.config.cfg,
       consentStorePath: this.config.consentStorePath,
+      settingsStore: this.settingsStore,
       core: this.core,
       logger: this.logger.child({ recordingId }),
     })

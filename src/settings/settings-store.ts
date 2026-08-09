@@ -307,6 +307,15 @@ function isSnowflake(value: string): boolean {
 }
 
 /**
+ * Refuse to STORE an id the reader would throw away. Loud beats silent: the
+ * alternative is a write that appears to succeed and is gone by the next read.
+ */
+function assertSnowflake(value: string, field: string): void {
+  if (isSnowflake(value)) return
+  throw new Error(`settings: ${field} must be a Discord snowflake, got ${JSON.stringify(value)}`)
+}
+
+/**
  * Normalize a whole document off untrusted input — the import path, and the
  * parse path for a file someone hand-edited. Unknown keys are dropped, never
  * carried through.
@@ -413,12 +422,14 @@ export class FileSettingsStore implements SettingsStore {
   }
 
   async setScene(guildId: string, voiceChannelId: string, settings: ChannelSettings): Promise<void> {
+    assertSnowflake(voiceChannelId, 'voiceChannelId')
     return this.mutate(guildId, (world) => {
       world.scenes[voiceChannelId] = pickChannelSettings(settings)
     })
   }
 
   async clearScene(guildId: string, voiceChannelId: string): Promise<void> {
+    assertSnowflake(voiceChannelId, 'voiceChannelId')
     return this.mutate(guildId, (world) => {
       delete world.scenes[voiceChannelId]
     })
@@ -445,8 +456,17 @@ export class FileSettingsStore implements SettingsStore {
     })
   }
 
-  /** Read-modify-write one world, serialized against every other mutation. */
+  /**
+   * Read-modify-write one world, serialized against every other mutation.
+   *
+   * ⚠️ Ids are validated here because the READ path discards non-snowflake
+   * keys (`parseSettingsFile`). Without this, a write with a malformed id
+   * succeeded, landed on disk, and then vanished on the next read — a silent
+   * write-then-lose. The routes validate too; this is what stops a direct
+   * caller reintroducing it.
+   */
   private mutate(guildId: string, apply: (world: GuildWorld) => void): Promise<void> {
+    assertSnowflake(guildId, 'guildId')
     return this.enqueue(async () => {
       const file = await this.read()
       const world = file.worlds[guildId] ?? {

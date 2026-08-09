@@ -66,7 +66,16 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
   const sink: OutputSink = config.cfg?.objectStorage
     ? new ObjectStorageSink(config.cfg.objectStorage, rootLogger.child({ module: 'object-storage-sink' }))
     : new LocalDirSink(config.outputDir, rootLogger.child({ module: 'output-sink' }))
-  const service = new RecordingService(client, sink, config, rootLogger)
+  // ONE settings store for the container's lifetime, shared by the recording
+  // path (which only READS it) and the control API (which writes it, self-host
+  // only). Two instances would mean two write queues over one file — the
+  // lost-update shape the single-writer rule exists to avoid.
+  const settingsStore = new FileSettingsStore({
+    path: config.settingsPath,
+    logger: rootLogger.child({ module: 'settings' }),
+  })
+
+  const service = new RecordingService(client, sink, config, rootLogger, settingsStore)
 
   // ── 3. HTTP control server — the container's only drive surface.
   // CFG-hosted: bind 0.0.0.0 (core-server reaches the published port) +
@@ -81,12 +90,7 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
     // core-server owns that surface.
     dashboard: !cfgHosted,
     controlToken: config.controlToken,
-    // The container's own settings. ONE store for the container's lifetime,
-    // unlike the consent store which is per-session.
-    settingsStore: new FileSettingsStore({
-      path: config.settingsPath,
-      logger: rootLogger.child({ module: 'settings' }),
-    }),
+    settingsStore,
     // CFG-hosted: core-server owns the file and writes it directly, so the
     // container must not be a second writer. Self-host: nothing else exists,
     // so the container owns it. Same split as ConsentSync.

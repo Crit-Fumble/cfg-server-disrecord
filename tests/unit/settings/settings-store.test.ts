@@ -377,6 +377,19 @@ describe('FileSettingsStore', () => {
     expect((await store.world(GUILD))?.defaults.keywords).toEqual(['kept'])
   })
 
+  it('REFUSES to store an id the reader would throw away', async () => {
+    const store = new FileSettingsStore({ path, logger: makeLogger() })
+
+    // The read path drops non-snowflake keys (parseSettingsFile). Without this
+    // guard a write with a malformed id succeeded, landed on disk, and was gone
+    // by the next read — a silent write-then-lose. Loud beats silent.
+    await expect(store.setScene('guild-1', CHANNEL, { keywords: ['x'] })).rejects.toThrow(/snowflake/)
+    await expect(store.setScene(GUILD, 'vc-1', { keywords: ['x'] })).rejects.toThrow(/snowflake/)
+    await expect(store.setWorldDefaults('not-an-id', {})).rejects.toThrow(/snowflake/)
+
+    await expect(readFile(path, 'utf-8')).rejects.toThrow()
+  })
+
   it('creates the parent directory when it is missing', async () => {
     const nested = join(dir, 'a', 'b', 'worlds.json')
     const store = new FileSettingsStore({ path: nested, logger: makeLogger() })

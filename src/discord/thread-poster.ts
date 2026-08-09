@@ -70,6 +70,32 @@ export function nextThreadName(base: string, existingNames: string[]): string {
  * if both fail, returns null and the recording stays in object storage
  * for out-of-band retrieval.
  */
+/**
+ * Render a thread-name template.
+ *
+ * Tokens: `{{voiceChannel}}`, `{{date}}`, `{{kind}}`. An unknown token is left
+ * exactly as written rather than blanked — a typo should look like a typo in
+ * the thread title, not silently vanish and leave the operator wondering which
+ * of their tokens is wrong.
+ *
+ * Returns null for an absent or effectively-empty template, so the caller keeps
+ * the built-in `<voice> - <date> - <kind>` shape. This field was collected by
+ * the settings UI for months with NOTHING rendering it; this is the renderer.
+ */
+export function renderThreadName(
+  template: string | undefined,
+  values: { voiceChannel: string; date: string; kind: string },
+): string | null {
+  if (!template) return null
+  const rendered = template.replace(/\{\{\s*(voiceChannel|date|kind)\s*\}\}/g, (_m, token: string) => {
+    if (token === 'voiceChannel') return values.voiceChannel
+    if (token === 'date') return values.date
+    return values.kind
+  })
+  const trimmed = rendered.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
+
 export async function createRecordingThread(
   client: Client,
   textChannelId: string,
@@ -77,6 +103,8 @@ export async function createRecordingThread(
   transcription: boolean,
   memberIds: string[],
   logger: Logger,
+  /** Operator's `threadNameTemplate`, when the channel or world sets one. */
+  threadNameTemplate?: string,
 ): Promise<string | null> {
   try {
     const channel = await client.channels.fetch(textChannelId)
@@ -90,7 +118,12 @@ export async function createRecordingThread(
       year: 'numeric',
     })
     const kindLabel = transcription ? 'Transcription' : 'Recording'
-    const rawName = `${voiceChannelName} - ${dateStr} - ${kindLabel}`
+    const rawName =
+      renderThreadName(threadNameTemplate, {
+        voiceChannel: voiceChannelName,
+        date: dateStr,
+        kind: kindLabel,
+      }) ?? `${voiceChannelName} - ${dateStr} - ${kindLabel}`
     // 96, not 100: leave room for the " N" de-dup suffix below inside
     // Discord's 100-char thread-name cap.
     const base = rawName.length > 96 ? rawName.slice(0, 96) : rawName
