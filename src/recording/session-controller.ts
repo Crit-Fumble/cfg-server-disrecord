@@ -24,6 +24,7 @@ import { ActiveTimeMeter } from './active-time-meter.js'
 import { RecordingSession, type TranscriptFinalEvent, type TranscriptInterimEvent } from './recording-session.js'
 import { buildDeepgramTokenProvider } from '../deepgram/index.js'
 import { ConsentManager } from '../consent/consent-manager.js'
+import { FileConsentStore, type ConsentStore } from '../consent/consent-store.js'
 import { processRecording } from './post-process.js'
 import { ChunkRecorder, type ChunkInfo } from './chunk-recorder.js'
 import { createRecordingThread, postChunk, postRecording, tempDirOf } from '../discord/thread-poster.js'
@@ -117,6 +118,12 @@ export interface SessionControllerParams {
    */
   cfg?: CfgHostedConfig
   /**
+   * Where SELF-HOST remembers channel-scoped consent, so "Yes, and remember"
+   * survives the session. Ignored when `cfg` is present — core owns persistent
+   * consent there.
+   */
+  consentStorePath: string
+  /**
    * Phone-home client. Always supplied; it is a no-op client when self-host
    * (see {@link CoreServerClient}). The controller only wires the
    * billing/consent/transcript paths when `cfg` is also present.
@@ -167,6 +174,12 @@ export class SessionController {
 
   /** CFG-hosted consent bridge — only constructed when `cfg` is present. */
   private consentSync: ConsentSync | null = null
+  /**
+   * SELF-HOST ONLY channel-scoped consent memory. Null when CFG-hosted, where
+   * core owns persistent consent — two writers would need reconciling, so
+   * exactly one is ever constructed. Same split as {@link consentSync}.
+   */
+  private consentStore: ConsentStore | null = null
   /** Billing-tick timer — only armed when `cfg` is present. */
   private billingTimer: NodeJS.Timeout | null = null
   /**
@@ -297,6 +310,19 @@ export class SessionController {
       logger: this.logger,
     })
 
+    // Self-host: remember channel-scoped decisions across sessions, which is
+    // what the "Yes, and remember" button has always claimed to do. The
+    // manager decides WHAT is worth remembering (core's rule, mirrored); this
+    // only writes it down. Never wired CFG-hosted — core's handleConsentButton
+    // is the writer there.
+    if (!p.cfg) {
+      const store = new FileConsentStore({ path: p.consentStorePath, logger: this.logger })
+      this.consentStore = store
+      this.consent.onPersistentDecision((userId, status) => {
+        void store.set(p.guildId, p.voiceChannelId, userId, status)
+      })
+    }
+
     this.pcmCapture = new PcmCapture({
       recordingId: this.recordingId,
       tempDir: this.tempDir,
@@ -338,6 +364,24 @@ export class SessionController {
         { consented: policy.consentedUserIds.length, keywords: policyKeywords.length, keyterms: policyKeyterms.length },
         'consent + keywords seeded from session policy',
       )
+    } else if (this.consentStore) {
+      // ── Self-host: the local store IS the session policy ──────────────────
+      // Same job as the CFG-hosted branch above — apply the decisions people
+      // have already made for this channel so they aren't re-prompted every
+      // session. Without it "Yes, and remember" remembered nothing, because
+      // core's webhook (the only writer) does not exist here.
+      try {
+        const stored = await this.consentStore.load(p.guildId, p.voiceChannelId)
+        for (const [userId, status] of stored) {
+          if (status === 'opted-in') this.consent.applyConsent(userId)
+          else this.consent.applyDecline(userId)
+        }
+        this.logger.info({ stored: stored.size }, 'consent seeded from local store')
+      } catch (err) {
+        // Never fail a recording over remembered preferences — everyone just
+        // gets prompted, which is the pre-store behaviour.
+        this.logger.warn({ err }, 'local consent seed failed — every speaker will be prompted')
+      }
     }
 
     this.session = new RecordingSession({

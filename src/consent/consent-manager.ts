@@ -26,8 +26,11 @@ import {
   type Interaction,
 } from 'discord.js'
 import type { Logger } from '../logger.js'
+import type { PersistentConsentStatus } from './consent-store.js'
 
 type ConsentListener = (userId: string) => void
+/** A decision that should outlive the session — see {@link ConsentManager.onPersistentDecision}. */
+type PersistentDecisionListener = (userId: string, status: PersistentConsentStatus) => void
 
 export interface ConsentManagerParams {
   recordingId: string
@@ -130,6 +133,7 @@ export class ConsentManager {
 
   private readonly consentListeners: ConsentListener[] = []
   private readonly declineListeners: ConsentListener[] = []
+  private readonly persistentDecisionListeners: PersistentDecisionListener[] = []
 
   /** Bound interaction handler — retained so it can be detached on stop(). */
   private readonly interactionHandler: (interaction: Interaction) => void
@@ -168,6 +172,42 @@ export class ConsentManager {
   /** Register a callback fired when a user transitions to declined. */
   onDecline(listener: ConsentListener): void {
     this.declineListeners.push(listener)
+  }
+
+  /**
+   * Register a callback for a decision that should OUTLIVE this session —
+   * i.e. one that belongs in a channel-scoped consent record.
+   *
+   * ⚠️ Wire this in SELF-HOST ONLY. CFG-hosted persists the same decision in
+   * core via `handleConsentButton`, and two writers would need reconciling.
+   */
+  onPersistentDecision(listener: PersistentDecisionListener): void {
+    this.persistentDecisionListeners.push(listener)
+  }
+
+  /**
+   * Decide whether a click is worth remembering, then fan it out.
+   *
+   * The rule is core's `handleConsentButton`, copied deliberately rather than
+   * re-derived — a self-hoster and a CFG user reading the same button label
+   * must get the same behaviour:
+   *
+   *   - decline                → ALWAYS persists opt-out (don't re-prompt someone
+   *                              who has said no)
+   *   - consent + remember     → persists opt-in
+   *   - consent, this time only → persists NOTHING; they get re-prompted
+   */
+  private emitPersistentDecision(userId: string, action: 'consent' | 'decline', remember: boolean): void {
+    const consented = action === 'consent'
+    if (consented && !remember) return
+    const status: PersistentConsentStatus = consented ? 'opted-in' : 'opted-out'
+    for (const fn of this.persistentDecisionListeners) {
+      try {
+        fn(userId, status)
+      } catch (err) {
+        this.logger.warn({ err, userId, status }, 'persistent-decision listener threw')
+      }
+    }
   }
 
   /**
@@ -560,12 +600,16 @@ export class ConsentManager {
     if (!interaction.isButton()) return
     const [action, key] = interaction.customId.split(':')
     if (key !== this.buttonKey) return
-    // `consent_remember` collapses to the same applyConsent on the
-    // container side — the persistent opt-in DB write is core-server's
-    // job in handleConsentButton. Both grant audio for THIS session.
-    const normalized = action === 'consent_remember' ? 'consent' : action
+    // `consent_remember` grants audio for THIS session exactly like `consent`
+    // — but the two differ in what OUTLIVES the session, so the distinction is
+    // carried through rather than collapsed here. CFG-hosted persists it in
+    // core (`handleConsentButton`); self-host persists it via the
+    // persistent-decision listener. It used to be flattened at this line,
+    // which is why "Yes, and remember" did nothing at all in self-host.
+    const remember = action === 'consent_remember'
+    const normalized = remember ? 'consent' : action
     if (normalized !== 'consent' && normalized !== 'decline') return
-    void this.handleConsentInteraction(interaction, normalized as 'consent' | 'decline')
+    void this.handleConsentInteraction(interaction, normalized as 'consent' | 'decline', remember)
   }
 
   /**
@@ -579,6 +623,7 @@ export class ConsentManager {
   private async handleConsentInteraction(
     interaction: Interaction,
     action: 'consent' | 'decline',
+    remember = false,
   ): Promise<void> {
     if (!interaction.isButton()) return
     const userId = interaction.user.id
@@ -598,6 +643,7 @@ export class ConsentManager {
       // the user got no confirmation.
       if (action === 'consent') this.applyConsent(userId)
       else this.applyDecline(userId)
+      this.emitPersistentDecision(userId, action, remember)
       return
     }
 
@@ -609,6 +655,7 @@ export class ConsentManager {
         this.applyDecline(userId)
         this.logger.info({ recordingId: this.recordingId, userId }, 'consent applied (decline)')
       }
+      this.emitPersistentDecision(userId, action, remember)
     } catch (err) {
       this.logger.error({ err, userId, recordingId: this.recordingId }, 'applyConsent threw')
     }

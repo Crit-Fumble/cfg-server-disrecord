@@ -64,6 +64,16 @@ export interface StandaloneConfig {
   /** Local directory finalized mp3 + VTT land in. Default `/data/recordings`. */
   outputDir: string
   /**
+   * Where the SELF-HOST persistent-consent store lives, so "Yes, and remember"
+   * survives a session (CFG-hosted keeps that in core and ignores this).
+   *
+   * Defaults inside `outputDir` on purpose: that path is already the one a
+   * self-hoster must mount to keep their recordings, so remembering consent
+   * needs no second mount and no extra documentation. Override with
+   * `CONSENT_STORE_PATH` to put it elsewhere.
+   */
+  consentStorePath: string
+  /**
    * Real-time mp3 chunking cadence in minutes (#131). `0` (the default)
    * disables chunking — the session behaves exactly as before, producing only
    * the whole-session mp3 at stop(). When `> 0`, a chunk mp3 covering the last
@@ -229,6 +239,9 @@ export function resolveStandaloneConfig(): StandaloneConfig {
 
   const cfg = resolveCfgHostedConfig()
 
+  // Resolved once — the consent store defaults to a path inside it.
+  const outputDir = optionalEnv('OUTPUT_DIR', '/data/recordings')
+
   // Per-speaker audio retention (#12). Two independent gates, because this is
   // the most sensitive artifact the container holds:
   //
@@ -253,7 +266,8 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     deepgramMode,
     deepgramModel: optionalEnv('DEEPGRAM_MODEL', 'nova-3'),
     deepgramLanguage: optionalEnv('DEEPGRAM_LANGUAGE', 'en'),
-    outputDir: optionalEnv('OUTPUT_DIR', '/data/recordings'),
+    outputDir: outputDir,
+    consentStorePath: optionalEnv('CONSENT_STORE_PATH', `${outputDir}/consent-store.json`),
     keepPcm: keepPcmRequested && cfg == null,
     controlPort,
     controlToken: process.env.CONTROL_TOKEN || undefined,
