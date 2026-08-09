@@ -30,6 +30,7 @@ import { RecordingService } from './recording/recording-service.js'
 import { LocalDirSink, ObjectStorageSink, type OutputSink } from './recording/output-sink.js'
 import { startControlServer } from './control/server.js'
 import { createControlAuthenticator } from './control/auth.js'
+import { FileSettingsStore } from './settings/settings-store.js'
 
 const logger = rootLogger.child({ module: 'standalone' })
 
@@ -80,6 +81,16 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
     // core-server owns that surface.
     dashboard: !cfgHosted,
     controlToken: config.controlToken,
+    // The container's own settings. ONE store for the container's lifetime,
+    // unlike the consent store which is per-session.
+    settingsStore: new FileSettingsStore({
+      path: config.settingsPath,
+      logger: rootLogger.child({ module: 'settings' }),
+    }),
+    // CFG-hosted: core-server owns the file and writes it directly, so the
+    // container must not be a second writer. Self-host: nothing else exists,
+    // so the container owns it. Same split as ConsentSync.
+    settingsReadOnly: cfgHosted,
     logger: rootLogger.child({ module: 'control' }),
   })
 

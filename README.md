@@ -108,13 +108,67 @@ and verifies the per-session JWT instead.
 POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription? } → { recordingId }
 POST /v1/recordings/:id/pause  → 204
 POST /v1/recordings/:id/resume → 204
-POST /v1/recordings/:id/stop   → 202   (post-processing async)
+POST /v1/recordings/:id/stop   → 200   (BLOCKS until mix + upload + Discord post finish)
 GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused }
 GET  /v1/recordings            → [ ... ]
 GET  /v1/guilds                → { guilds: [ { id, name, voiceChannels, textChannels } ] }   (self-host)
 GET  /v1/diagnostics           → { botReady, botTag, guildCount, intents, activeRecordings } (self-host)
 GET  /healthz                  → { ok, botReady, activeRecordings }
 ```
+
+`stop` is deliberately synchronous: whoever calls it is usually about to kill
+the container, so returning early would cut delivery off mid-upload. Budget a
+generous client timeout — a long session takes minutes to mix and upload.
+
+### Settings
+
+The container keeps its own guild/channel config, so it needs no database and
+no platform to be useful. The model is Foundry-shaped — **a guild is a world, a
+voice channel is a scene**, and a scene inherits its world's defaults field by
+field, overriding only what it names.
+
+```
+GET    /v1/worlds                              → { worlds: { <guildId>: { defaults, scenes, grants? } } }
+GET    /v1/worlds/:guildId                     → one world (404 if unconfigured)
+PUT    /v1/worlds/:guildId/defaults            world-level defaults          → { defaults }
+GET    /v1/worlds/:guildId/scenes/:channelId   → { effective, override }
+PUT    /v1/worlds/:guildId/scenes/:channelId   one channel's override        → { effective, override }
+DELETE /v1/worlds/:guildId/scenes/:channelId   → 204   (clear it; inherits again)
+GET    /v1/worlds/:guildId/grants              → { grants: [ ... ] }
+PUT    /v1/worlds/:guildId/grants              replace them wholesale        → { grants }
+GET    /v1/settings/export                     → the whole document, as a download
+PUT    /v1/settings/import                     replace the whole document    → { worlds: <count> }
+```
+
+Settable per world or per channel: `keywords`, `keyterms`,
+`transcriptionEnabled`, `deepgramModel`, `deepgramLanguage`, `outputChannelId`,
+`outputThreadId`, `threadNameTemplate`.
+
+⚠️ **Not yet consumed by recordings.** The document, its API and its
+persistence are real; the recording path still reads keywords from the platform
+session policy and names threads itself. Configure freely — values are stored
+faithfully — but expect them to take effect only once the recording path is
+wired to the store.
+
+Absent means *inherit*; an empty array or empty string means *explicitly none*,
+so a channel can switch off keywords its world sets.
+
+A scene read returns **both** `effective` (what a recording will actually use)
+and `override` (only what this channel sets itself) — rendering the resolved
+value into a form would make every inherited field look explicitly set, and
+saving it would freeze the inheritance.
+
+**Export and import are the portability story.** `GET /v1/settings/export`
+hands back the whole document as a file; `PUT /v1/settings/import` replaces it.
+Safe to save, edit by hand and share, because the document carries **no
+credentials and no platform identifiers** — bot tokens and Deepgram keys live
+in the environment, and every id in the file is a Discord snowflake. An import
+keeps what it can parse and drops the rest, so a partially hand-edited file
+still applies the parts you got right.
+
+⚠️ **CFG-hosted containers are read-only here** and answer `405` to every
+write: the platform owns the file there, and two writers would race over a
+document that is replaced whole. Reads work in both modes.
 
 The bundled `disrecord` CLI wraps it: `disrecord status [id]`,
 `disrecord start` (reads `START_GUILD_ID` / `START_VOICE_CHANNEL_ID`),

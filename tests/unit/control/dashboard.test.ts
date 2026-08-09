@@ -8,10 +8,11 @@
  */
 import type { FastifyInstance } from 'fastify'
 import { startControlServer } from '../../../src/control/server.js'
-import { assertDashboardBindIsSafe } from '../../../src/control/dashboard.js'
+import { assertOpenSurfaceBindIsSafe } from '../../../src/control/dashboard.js'
 import { createControlAuthenticator } from '../../../src/control/auth.js'
 import type { RecordingService } from '../../../src/recording/recording-service.js'
 import { logger } from '../../../src/logger.js'
+import { testSettingsStore } from '../../_lib/settings.js'
 
 const GUILDS = [
   {
@@ -52,6 +53,11 @@ async function makeServer(opts: { dashboard: boolean; token?: string }): Promise
     dashboard: opts.dashboard,
     controlToken: opts.token,
     authenticate: createControlAuthenticator({ controlToken: opts.token }),
+    settingsStore: testSettingsStore(),
+    // Read-only so these tests exercise the DASHBOARD bind guard specifically.
+    // With writes on, the settings guard would fire first and the dashboard
+    // assertions would pass without the dashboard guard ever running.
+    settingsReadOnly: true,
     logger,
   })
 }
@@ -134,23 +140,23 @@ describe('self-host dashboard', () => {
   })
 })
 
-describe('assertDashboardBindIsSafe', () => {
+describe('assertOpenSurfaceBindIsSafe', () => {
   it('allows a loopback bind with no token — the existing self-host contract', () => {
-    expect(() => assertDashboardBindIsSafe('127.0.0.1', undefined)).not.toThrow()
-    expect(() => assertDashboardBindIsSafe('::1', undefined)).not.toThrow()
-    expect(() => assertDashboardBindIsSafe('localhost', undefined)).not.toThrow()
+    expect(() => assertOpenSurfaceBindIsSafe('127.0.0.1', undefined)).not.toThrow()
+    expect(() => assertOpenSurfaceBindIsSafe('::1', undefined)).not.toThrow()
+    expect(() => assertOpenSurfaceBindIsSafe('localhost', undefined)).not.toThrow()
   })
 
   it('allows a wide bind when a control token is set', () => {
-    expect(() => assertDashboardBindIsSafe('0.0.0.0', 'secret')).not.toThrow()
+    expect(() => assertOpenSurfaceBindIsSafe('0.0.0.0', 'secret')).not.toThrow()
   })
 
   it('refuses a wide bind with no token', () => {
     // "no CONTROL_TOKEN ⇒ every request allowed" is only defensible on
     // loopback. Widening the bind without a token would put an open recording
     // surface on a public interface — a boot-time refusal, not a doc line.
-    expect(() => assertDashboardBindIsSafe('0.0.0.0', undefined)).toThrow(/CONTROL_TOKEN/)
-    expect(() => assertDashboardBindIsSafe('10.0.0.5', '')).toThrow(/open recording surface/)
+    expect(() => assertOpenSurfaceBindIsSafe('0.0.0.0', undefined)).toThrow(/CONTROL_TOKEN/)
+    expect(() => assertOpenSurfaceBindIsSafe('10.0.0.5', '')).toThrow(/open recording surface/)
   })
 
   it('refuses at boot rather than after the port is listening', async () => {
@@ -162,6 +168,8 @@ describe('assertDashboardBindIsSafe', () => {
         dashboard: true,
         controlToken: undefined,
         authenticate: createControlAuthenticator({ controlToken: undefined }),
+        settingsStore: testSettingsStore(),
+        settingsReadOnly: true,
         logger,
       }),
     ).rejects.toThrow(/CONTROL_TOKEN/)
