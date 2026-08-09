@@ -132,6 +132,42 @@ describe('ConsentManager — persistent decisions mirror core handleConsentButto
     expect(h.mgr.isConsented('user-1')).toBe(false)
   })
 
+  it('the CONTROL-API path persists by the same rule as the buttons', () => {
+    const h = makeHarness()
+
+    // The bug this pins: `pushConsent` used to poke applyConsent/applyDecline
+    // directly, so every decision made through the dashboard or the control
+    // API was this-session-only — FOREVER, and including declines, which are
+    // supposed to persist unconditionally. Same silent-nothing shape as the
+    // "Yes, and remember" button doing nothing, one path over.
+    h.mgr.applyExternalDecision('api-remember', true, true)
+    h.mgr.applyExternalDecision('api-once', true, false)
+    h.mgr.applyExternalDecision('api-decline', false, false)
+
+    expect(h.decisions).toEqual([
+      { userId: 'api-remember', status: 'opted-in' },
+      // 'api-once' persists NOTHING — "this time only".
+      { userId: 'api-decline', status: 'opted-out' },
+    ])
+    // ...and the in-session gate is set either way.
+    expect(h.mgr.isConsented('api-remember')).toBe(true)
+    expect(h.mgr.isConsented('api-once')).toBe(true)
+    expect(h.mgr.isConsented('api-decline')).toBe(false)
+  })
+
+  it('exposes who is pending and who declined', () => {
+    const h = makeHarness()
+    h.mgr.markPending(['waiting'])
+    h.mgr.applyExternalDecision('said-no', false)
+    h.mgr.applyExternalDecision('said-yes', true)
+
+    // What lets a dashboard offer a row per speaker instead of demanding a
+    // hand-typed snowflake.
+    expect([...h.mgr.pendingIds()]).toEqual(['waiting'])
+    expect([...h.mgr.declinedIds()]).toEqual(['said-no'])
+    expect([...h.mgr.consentedIds()]).toEqual(['said-yes'])
+  })
+
   it('ignores an unrecognised action', async () => {
     const h = makeHarness()
     await h.click('definitely_not_a_consent_action')

@@ -36,6 +36,13 @@ You need a Discord bot and (optionally) a Deepgram API key.
 2. **Invite the bot** to your server with the `bot` scope and the
    **Connect**, **Speak**, **Send Messages**, and **Create Public Threads**
    permissions.
+   ⚠️ **Do NOT set an Interactions Endpoint URL on this application.** Discord
+   delivers interactions over the gateway *or* by HTTP to that URL — the two
+   are mutually exclusive — and the consent buttons rely on the gateway. With a
+   URL configured, clicking a consent button shows "didn't respond in time",
+   the audio gate never opens, and the session records silence. A fresh bot has
+   no such URL; the container warns loudly at boot if it finds one.
+
 3. **Configure `.env`** — copy `.env.example` and fill in at least:
 
    ```sh
@@ -80,6 +87,24 @@ everyone gets prompted again.
 If the file is ever unreadable the container says so loudly and **refuses to
 overwrite it**, running that session from memory instead: a failed parse must
 never destroy a consent record.
+
+### Consent
+
+Recording is **opt-out by default**: a speaker's audio is dropped until they
+consent. Two paths, both owned entirely by this container — core-server is not
+involved in either:
+
+- **In Discord** — the three buttons on the session-start announcement. These
+  need gateway delivery, so the application must have no Interactions Endpoint
+  URL (see the warning above).
+- **From the dashboard or the control API** — `POST /v1/recordings/:id/consent`
+  with `{ discordUserId, consented, remember? }`. The dashboard shows a row per
+  speaker the session has seen, with Allow / Skip, so nobody has to hand-type a
+  snowflake mid-session.
+
+Both paths obey the same persistence rule: a **decline always** persists so
+someone who said no is not asked again next week, a consent persists only with
+`remember` ("Yes, and remember" vs "Yes, this time only").
 
 ### Built-in dashboard (self-host only)
 

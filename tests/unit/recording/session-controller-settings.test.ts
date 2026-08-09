@@ -51,7 +51,7 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
   tempDirOf: jest.fn(() => '/tmp'),
 }))
 
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SessionController, type SessionControllerParams } from '../../../src/recording/session-controller.js'
@@ -95,7 +95,7 @@ function coreWithPolicyKeywords(): CoreServerClient {
 let dir: string
 let store: FileSettingsStore
 
-async function start(overrides: Partial<SessionControllerParams> = {}): Promise<void> {
+async function start(overrides: Partial<SessionControllerParams> = {}): Promise<SessionController> {
   const params: SessionControllerParams = {
     recordingId: 'rec-1',
     client: fakeClient(),
@@ -122,7 +122,9 @@ async function start(overrides: Partial<SessionControllerParams> = {}): Promise<
     logger: silentLogger,
     ...overrides,
   }
-  await new SessionController(params).start()
+  const controller = new SessionController(params)
+  await controller.start()
+  return controller
 }
 
 /** Keywords the RecordingSession was constructed with. */
@@ -190,5 +192,39 @@ describe('SessionController — the container’s own settings', () => {
     await start({ settingsStore: broken })
     // Falls back to the policy — exactly the pre-settings behaviour.
     expect(builtWith().keywords).toEqual(['policy-kw'])
+  })
+})
+
+describe('SessionController.pushConsent — the control-API path', () => {
+  it('persists a remembered decision all the way to disk', async () => {
+    // ⚠️ This drives the WIRING, not the manager. A direct
+    // ConsentManager.applyExternalDecision test passes even with
+    // pushConsent reverted to poking applyConsent/applyDecline — which is
+    // exactly the bug, and exactly the kind of green-for-the-wrong-reason
+    // this repo keeps catching.
+    const controller = await start({ cfg: undefined }) // self-host wires the store
+    controller.pushConsent('400000000000000005', true, true)
+    await new Promise((r) => setTimeout(r, 50))
+
+    const doc = JSON.parse(await readFile(join(dir, 'consent.json'), 'utf-8'))
+    expect(doc.channels[`${GUILD}/${CHANNEL}`]).toEqual({ '400000000000000005': 'opted-in' })
+  })
+
+  it('persists a decline even without remember', async () => {
+    const controller = await start({ cfg: undefined })
+    controller.pushConsent('400000000000000006', false)
+    await new Promise((r) => setTimeout(r, 50))
+
+    // Core's rule, mirrored: someone who said no is not asked again next week.
+    const doc = JSON.parse(await readFile(join(dir, 'consent.json'), 'utf-8'))
+    expect(doc.channels[`${GUILD}/${CHANNEL}`]).toEqual({ '400000000000000006': 'opted-out' })
+  })
+
+  it('a this-time-only consent writes nothing durable', async () => {
+    const controller = await start({ cfg: undefined })
+    controller.pushConsent('400000000000000007', true, false)
+    await new Promise((r) => setTimeout(r, 50))
+
+    await expect(readFile(join(dir, 'consent.json'), 'utf-8')).rejects.toThrow()
   })
 })

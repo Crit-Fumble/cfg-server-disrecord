@@ -30,12 +30,14 @@ import { RecordingService } from './recording/recording-service.js'
 import { LocalDirSink, ObjectStorageSink, type OutputSink } from './recording/output-sink.js'
 import { startControlServer } from './control/server.js'
 import { createControlAuthenticator } from './control/auth.js'
+import { fetchInteractionDelivery, warnIfButtonsCannotFire } from './gateway/interaction-delivery.js'
 import { FileSettingsStore } from './settings/settings-store.js'
 
 const logger = rootLogger.child({ module: 'standalone' })
 
 export async function startStandalone(config: StandaloneConfig): Promise<void> {
   const cfgHosted = config.cfg != null
+  let interactionDelivery = null
   logger.info(
     {
       outputDir: config.outputDir,
@@ -75,7 +77,17 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
     logger: rootLogger.child({ module: 'settings' }),
   })
 
+  // Which way Discord delivers this application's interactions is a per-APP
+  // axis the container cannot infer from its own config. Self-host only: in
+  // CFG-hosted the endpoint URL is correct and belongs to core-server.
+  if (!cfgHosted) {
+    const delivery = await fetchInteractionDelivery(config.discordToken, logger)
+    warnIfButtonsCannotFire(delivery, logger)
+    interactionDelivery = delivery
+  }
+
   const service = new RecordingService(client, sink, config, rootLogger, settingsStore)
+  service.setInteractionDelivery(interactionDelivery)
 
   // ── 3. HTTP control server — the container's only drive surface.
   // CFG-hosted: bind 0.0.0.0 (core-server reaches the published port) +
