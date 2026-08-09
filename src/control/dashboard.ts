@@ -22,7 +22,7 @@
  * inert markup — every action it can take goes through `/v1/*`, which the
  * control server's auth hook already covers. With `CONTROL_TOKEN` set the page
  * asks for the token and sends it as a bearer; without one, the container is
- * on loopback and already open. `assertDashboardBindIsSafe` is what keeps that
+ * on loopback and already open. `assertOpenSurfaceBindIsSafe` is what keeps that
  * reasoning true.
  */
 
@@ -44,11 +44,21 @@ import type { RecordingService } from '../recording/recording-service.js'
  * Today `standalone.ts` hardcodes the loopback bind in self-host, so this
  * cannot fire. It exists for whoever makes that configurable.
  */
-export function assertDashboardBindIsSafe(host: string, controlToken: string | undefined): void {
+export function assertOpenSurfaceBindIsSafe(
+  host: string,
+  controlToken: string | undefined,
+  /**
+   * What is about to be served, for the error message. Defaults to the
+   * dashboard, which is what this originally guarded; the settings write API
+   * asks the identical question, so it reuses this rather than restating the
+   * reasoning.
+   */
+  surface = 'self-host dashboard',
+): void {
   const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1'
   if (loopback || controlToken) return
   throw new Error(
-    `refusing to serve the self-host dashboard on ${host} without CONTROL_TOKEN — ` +
+    `refusing to serve the ${surface} on ${host} without CONTROL_TOKEN — ` +
       'a non-loopback bind with no auth is an open recording surface. Set CONTROL_TOKEN or bind 127.0.0.1.',
   )
 }

@@ -10,6 +10,7 @@ import { createControlAuthenticator } from '../../../src/control/auth.js'
 import { GuildConflictError, SessionNotFoundError } from '../../../src/recording/recording-service.js'
 import type { RecordingService } from '../../../src/recording/recording-service.js'
 import { logger } from '../../../src/logger.js'
+import { testSettingsStore } from '../../_lib/settings.js'
 
 /** Minimal RecordingService stand-in. */
 function fakeService(overrides: Partial<RecordingService> = {}): RecordingService {
@@ -33,6 +34,8 @@ async function makeServer(service: RecordingService, token?: string): Promise<Fa
     port: 0,
     host: '127.0.0.1',
     authenticate: createControlAuthenticator({ controlToken: token }),
+    settingsStore: testSettingsStore(),
+    settingsReadOnly: true,
     logger,
   })
 }
@@ -59,14 +62,14 @@ describe('control server', () => {
     // so `GET /%76%31/recordings` reached the handler while a
     // `req.url.startsWith('/v1/')` test said false. Every control route was
     // callable with no credential — start a recording, stop someone else's,
-    // enumerate guilds. Worst CFG-hosted, where the container binds 0.0.0.0 and
-    // any neighbour on the docker network could reach it.
+    // read the settings document. Worst CFG-hosted, where the container binds
+    // 0.0.0.0 and any neighbour on the docker network could reach it.
     //
     // The hook now keys off `routeOptions.url`, the decoded matched pattern.
     it.each([
       ['/%76%31/recordings', 'percent-encoded v1'],
+      ['/%76%31/settings/export', 'percent-encoded v1, settings'],
       ['/v%31/recordings', 'partially encoded'],
-      ['/%76%31/diagnostics', 'percent-encoded, another route'],
     ])('rejects %s (%s) — encoding must not bypass auth', async (url) => {
       app = await makeServer(fakeService(), 'secret')
       const res = await app.inject({ method: 'GET', url })
