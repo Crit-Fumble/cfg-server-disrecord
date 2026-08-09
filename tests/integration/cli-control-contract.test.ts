@@ -14,6 +14,7 @@ import { createControlAuthenticator } from '../../src/control/auth.js'
 import type { RecordingService } from '../../src/recording/recording-service.js'
 import { logger } from '../../src/logger.js'
 import { runCli } from '../../src/cli.js'
+import { testSettingsStore } from '../_lib/settings.js'
 
 function fakeService(overrides: Partial<RecordingService> = {}): RecordingService {
   const base = {
@@ -43,6 +44,8 @@ describe('CLI → control server', () => {
       port: 0,
       host: '127.0.0.1',
       authenticate: createControlAuthenticator({}),
+      settingsStore: testSettingsStore(),
+      settingsReadOnly: true,
       logger,
     })
     process.env.CONTROL_PORT = String((app.server.address() as AddressInfo).port)

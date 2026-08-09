@@ -18,11 +18,16 @@
  *   GET  /v1/recordings/:id/webhooks       → categorized cfg-resesh-* + foreign webhook list
  *   POST /v1/recordings/:id/webhooks/sweep → delete stale cfg-resesh-rec-* webhooks
  *   GET  /healthz                  → { ok, botReady, activeRecordings }
+ *
+ * Settings (`settings/settings-routes.ts`) register here too — the container's
+ * own guild/channel config, writable self-host and READ-ONLY when CFG-hosted.
  */
 
 import Fastify, { type FastifyInstance } from 'fastify'
 import { GuildConflictError, SessionNotFoundError } from '../recording/recording-service.js'
-import { assertDashboardBindIsSafe, registerDashboard } from './dashboard.js'
+import { assertOpenSurfaceBindIsSafe, registerDashboard } from './dashboard.js'
+import { registerSettingsRoutes } from '../settings/settings-routes.js'
+import type { SettingsStore } from '../settings/settings-store.js'
 import type { RecordingService } from '../recording/recording-service.js'
 import type { ControlAuthResult } from './auth.js'
 import type { Logger } from '../logger.js'
@@ -52,6 +57,26 @@ export interface ControlServerParams {
    * request-level check lives in `authenticate`.
    */
   controlToken?: string
+  /**
+   * The container's own settings document. Its routes register under `/v1/`
+   * alongside the recording ones.
+   */
+  settingsStore: SettingsStore
+  /**
+   * Refuse settings WRITES. True when CFG-hosted, where core-server owns the
+   * file — see the single-writer note in `settings/settings-routes.ts`.
+   */
+  settingsReadOnly: boolean
+  /**
+   * Observe every route as it registers.
+   *
+   * This exists for the credential guard test, and it is deliberately a hook
+   * rather than a hard-coded route list in the test: the guard's whole value is
+   * that it fails automatically the day someone adds a route that echoes
+   * config. A list would go stale silently, which is the failure mode the guard
+   * is meant to prevent. Unused in production.
+   */
+  onRoute?: (route: { method: string | string[]; url: string }) => void
   logger: Logger
 }
 
@@ -79,8 +104,16 @@ export async function startControlServer(params: ControlServerParams): Promise<F
   const app = Fastify({ logger: false })
 
   // Fail at boot rather than serving an open recording surface. No-op unless
-  // the dashboard is on — see assertDashboardBindIsSafe.
-  if (params.dashboard) assertDashboardBindIsSafe(host, params.controlToken)
+  // the dashboard is on — see assertOpenSurfaceBindIsSafe.
+  if (params.dashboard) assertOpenSurfaceBindIsSafe(host, params.controlToken)
+  // Same question for settings writes. Today both are gated on `!cfgHosted`, so
+  // this cannot fire independently — it is here so the two stay honest if that
+  // ever stops being true, rather than relying on the flags coinciding.
+  if (!params.settingsReadOnly) {
+    assertOpenSurfaceBindIsSafe(host, params.controlToken, 'settings write API')
+  }
+
+  if (params.onRoute) app.addHook('onRoute', params.onRoute)
 
   // Auth — applied to every /v1/* route. `/healthz` stays open so core-server
   // (and Docker healthchecks) can poll readiness before they hold a token.
@@ -88,12 +121,12 @@ export async function startControlServer(params: ControlServerParams): Promise<F
   // ⛔ MATCH ON THE ROUTE PATTERN, NEVER ON `req.url`.
   //
   // Fastify decodes the path when ROUTING but leaves `req.url` exactly as it
-  // arrived. So `GET /%76%31/recordings` routed to `/v1/recordings` while
-  // `req.url.startsWith('/v1/')` was FALSE — the hook returned early and the
-  // handler ran with no auth at all. That was an unauthenticated bypass of
-  // every control route: start a recording, stop someone else's, enumerate
-  // guilds and channels. It mattered most CFG-hosted, where the container binds
-  // 0.0.0.0 and any neighbour on the docker network could reach it.
+  // arrived. So `GET /%76%31/settings/export` routed to `/v1/settings/export`
+  // while `req.url.startsWith('/v1/')` was FALSE — the hook returned early and
+  // the handler ran with no auth at all. That was an unauthenticated bypass on
+  // every control route, including starting and stopping recordings, and it
+  // mattered most CFG-hosted, where the container binds 0.0.0.0 and any
+  // neighbour on the docker network could reach it.
   //
   // `routeOptions.url` is the matched pattern — already decoded, already
   // canonical, and immune to any encoding trick that still routes here. It is
@@ -233,6 +266,14 @@ export async function startControlServer(params: ControlServerParams): Promise<F
         .send({ error: 'webhook_sweep_unavailable', message: 'bot lacks MANAGE_WEBHOOKS or fetch failed' })
     }
     return reply.send({ recordingId: id, ...result })
+  })
+
+  // The container's own guild/channel settings. Registered in BOTH modes —
+  // reads are how core-server and the dashboard see the config — with writes
+  // gated inside by `readOnly`.
+  registerSettingsRoutes(app, params.settingsStore, {
+    readOnly: params.settingsReadOnly,
+    logger,
   })
 
   // Self-host dashboard (#9) — registered last, and only when enabled, so the
