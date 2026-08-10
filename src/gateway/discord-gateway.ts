@@ -73,13 +73,45 @@ export async function startGateway(token: string, logger: Logger): Promise<Clien
       logger.info({ user: client.user?.tag, id: client.user?.id }, 'discord bot ready')
       resolve()
     })
+    // A shard error can be the REAL cause of a failed boot — "Used disallowed
+    // intents" arrives here, not on login() — so reject on it rather than
+    // letting the ready timeout hide it behind a generic 30s stall.
+    client.once('shardError', (err) => {
+      clearTimeout(timeout)
+      reject(explainGatewayFailure(err))
+    })
     client.login(token).catch((err) => {
       clearTimeout(timeout)
-      reject(err instanceof Error ? err : new Error(String(err)))
+      reject(explainGatewayFailure(err instanceof Error ? err : new Error(String(err))))
     })
   })
 
   return client
+}
+
+/**
+ * Translate Discord's terser boot failures into something a human can act on.
+ *
+ * "Used disallowed intents" is the one that costs the most time: it is what
+ * Discord says when the application has not been granted the PRIVILEGED
+ * intents, which are OFF by default on every newly created app. The raw
+ * message names neither the intents nor where to enable them, so a first-time
+ * self-hoster gets a stack trace and no next step — and this container cannot
+ * work without them, because it resolves speaker display names (GuildMembers)
+ * and handles in-Discord consent clicks (MessageContent).
+ *
+ * Same doctrine as the interactions-endpoint warning: the failure is the
+ * cheapest place to teach.
+ */
+function explainGatewayFailure(err: Error): Error {
+  if (!/disallowed intents/i.test(err.message)) return err
+  return new Error(
+    'Discord rejected the connection: "Used disallowed intents". This bot is missing the ' +
+      'PRIVILEGED gateway intents, which are OFF by default on a new application. Enable ' +
+      'BOTH in the Discord Developer Portal → your app → Bot → Privileged Gateway Intents: ' +
+      '"SERVER MEMBERS INTENT" and "MESSAGE CONTENT INTENT", then restart. DisRecord needs ' +
+      'them to resolve speaker names and to receive consent-button clicks.',
+  )
 }
 
 /** Tear down the gateway client. Idempotent. */
