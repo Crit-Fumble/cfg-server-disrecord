@@ -31,13 +31,16 @@
 import type { CfgHostedConfig } from '../config.js'
 import type { Logger } from '../logger.js'
 
+/**
+ * The per-session policy core serves at recording start: the consent set and
+ * speaker names, ONLY. Keywords/keyterms were removed in Track A step 8 — the
+ * worker reads Deepgram boosts from its own settings store
+ * (`src/settings/settings-store.ts`), not from the platform. Re-adding
+ * operational settings here would rebuild the round-trip step 8 cut.
+ */
 export interface SessionPolicy {
   consentedUserIds: string[]
   speakerNames: Record<string, string>
-  /** Deepgram legacy per-utterance keywords. */
-  keywords?: string[]
-  /** Deepgram nova-3 keyterms. */
-  keyterms?: string[]
 }
 
 export interface TranscriptPayload {

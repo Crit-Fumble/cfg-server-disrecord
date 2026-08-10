@@ -1,15 +1,17 @@
 /**
  * The container's own settings reach a recording.
  *
- * Steps 1-2 gave DisRecord a settings document and an API; nothing read it.
- * This is the wiring, and the two rules that make it correct:
+ * Steps 1-2 gave DisRecord a settings document and an API; step 3 wired it,
+ * and step 8 made it the ONLY operational source — the platform's session
+ * policy carries the consent set and nothing else. The rules pinned here:
  *
- *   1. The file WINS over the platform's session policy. The document is the
- *      source of truth for operational config; the policy is the older path
- *      that still supplies the consent set.
+ *   1. Keywords/keyterms come from the settings store ALONE. Even a policy
+ *      that still carries legacy keyword fields (an older core-server) must
+ *      not leak them into the session — that round-trip was cut deliberately,
+ *      and the fake policy below still serves them so re-consuming them goes
+ *      red here.
  *   2. An EMPTY array is a real value, not an absence. A channel that sets
- *      `keywords: []` wants no boosts, and must not silently inherit the
- *      platform's list.
+ *      `keywords: []` wants no boosts.
  */
 
 const mockVoiceJoin = jest.fn(async () => undefined)
@@ -76,7 +78,10 @@ function fakeClient() {
   } as never
 }
 
-/** A CFG-hosted core client whose policy carries keywords, so "file wins" is testable. */
+/**
+ * A CFG-hosted core client whose policy STILL carries the legacy keyword
+ * fields, the way a pre-step-8 core-server does. Nothing may read them.
+ */
 function coreWithPolicyKeywords(): CoreServerClient {
   return {
     fetchSessionPolicy: jest.fn(async () => ({
@@ -145,17 +150,20 @@ afterEach(async () => {
 })
 
 describe('SessionController — the container’s own settings', () => {
-  it('falls back to the session policy when nothing is configured', async () => {
+  it('nothing configured means NO boosts — legacy policy keywords are ignored (step 8)', async () => {
     await start()
-    expect(builtWith()).toEqual({ keywords: ['policy-kw'], keyterms: ['policy-kt'] })
+    // The fake policy serves ['policy-kw']/['policy-kt']; consuming either
+    // would rebuild the round-trip step 8 cut.
+    expect(builtWith().keywords).toBeUndefined()
+    expect(builtWith().keyterms).toBeUndefined()
   })
 
-  it('the channel’s keywords WIN over the platform policy', async () => {
+  it('the channel’s keywords reach the session', async () => {
     await store.setScene(GUILD, CHANNEL, { keywords: ['Keawe', 'Mumbley'] })
     await start()
     expect(builtWith().keywords).toEqual(['Keawe', 'Mumbley'])
-    // keyterms unset on the scene, so that axis still defers.
-    expect(builtWith().keyterms).toEqual(['policy-kt'])
+    // keyterms unset on the scene: absent, not inherited from the policy.
+    expect(builtWith().keyterms).toBeUndefined()
   })
 
   it('inherits world defaults for an unconfigured channel', async () => {
@@ -164,11 +172,11 @@ describe('SessionController — the container’s own settings', () => {
     expect(builtWith().keywords).toEqual(['world-kw'])
   })
 
-  it('an EMPTY array means no boosts — it does not fall through to the policy', async () => {
+  it('an EMPTY array survives as an explicit "no boosts"', async () => {
     await store.setScene(GUILD, CHANNEL, { keywords: [] })
     await start()
-    // `??` not `||`: [] is a value. With `||` this would silently inherit
-    // ['policy-kw'] and the channel could never turn boosts off.
+    // [] is a value, distinct from absent — the store must not drop it on the
+    // way through `effective()`.
     expect(builtWith().keywords).toEqual([])
   })
 
@@ -190,8 +198,10 @@ describe('SessionController — the container’s own settings', () => {
       }),
     } as never
     await start({ settingsStore: broken })
-    // Falls back to the policy — exactly the pre-settings behaviour.
-    expect(builtWith().keywords).toEqual(['policy-kw'])
+    // The recording still boots; it just runs without boosts. (Pre-step-8
+    // this fell back to policy keywords — that source is gone.)
+    expect(mockRecordingSession).toHaveBeenCalledTimes(1)
+    expect(builtWith().keywords).toBeUndefined()
   })
 })
 
