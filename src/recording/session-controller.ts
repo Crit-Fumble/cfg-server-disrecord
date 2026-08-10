@@ -347,19 +347,13 @@ export class SessionController {
       core: p.core,
       logger: this.logger,
     })
-    // ── CFG-hosted: pre-fetch the session policy ────────────────────────────
-    // It carries TWO things we need before RecordingSession boots:
-    //   1. The seeded consent list (auto-consent for the invoker + anyone
-    //      who pre-consented via the Activity / channel settings).
-    //   2. Deepgram keywords / keyterms — campaign-derived plus per-channel
-    //      from ReseshChannelSettings. Without these the model misses
-    //      player names ("Keyway" instead of "Keawe"), monster names,
-    //      jargon, etc. Earlier the policy was fetched by consent-sync but
-    //      only consentedUserIds were consumed; the keyword fields were
-    //      thrown away.
     // ── The container's OWN settings for this channel ──────────────────────
-    // Scene over world defaults, field by field. Resolved before the policy so
-    // the merge below can prefer them.
+    // Scene over world defaults, field by field. Since Track A step 8 this is
+    // the ONLY source of Deepgram keywords/keyterms — the session policy
+    // carries the consent set and nothing operational. Without boosts the
+    // model misses player names ("Keyway" instead of "Keawe"), monster names,
+    // jargon, etc.; hosted installations get the file written by core (the
+    // `/data/disrecord` bind), self-hosters edit it via dashboard/control API.
     let channelSettings: ChannelSettings = {}
     try {
       channelSettings = await p.settingsStore.effective(p.guildId, p.voiceChannelId)
@@ -369,19 +363,15 @@ export class SessionController {
       this.logger.warn({ err }, 'settings lookup failed — falling back to session policy / env defaults')
     }
 
-    let policyKeywords: string[] = []
-    let policyKeyterms: string[] = []
+    // ── CFG-hosted: pre-fetch the session policy ────────────────────────────
+    // The seeded consent list only — auto-consent for the invoker plus anyone
+    // who pre-consented via the Activity / channel settings.
     if (p.cfg) {
       const policy = await p.core.fetchSessionPolicy()
       for (const userId of policy.consentedUserIds) {
         this.consent.applyConsent(userId)
       }
-      policyKeywords = policy.keywords ?? []
-      policyKeyterms = policy.keyterms ?? []
-      this.logger.info(
-        { consented: policy.consentedUserIds.length, keywords: policyKeywords.length, keyterms: policyKeyterms.length },
-        'consent + keywords seeded from session policy',
-      )
+      this.logger.info({ consented: policy.consentedUserIds.length }, 'consent seeded from session policy')
     } else if (this.consentStore) {
       // ── Self-host: the local store IS the session policy ──────────────────
       // Same job as the CFG-hosted branch above — apply the decisions people
@@ -407,18 +397,12 @@ export class SessionController {
       deepgramModel: p.deepgramModel,
       language: p.deepgramLanguage,
       consentedUserIds: this.consent.consentedIds(),
-      // The container's own settings WIN over the platform's session policy —
-      // this file is the source of truth for operational config, and the policy
-      // is the older path that still supplies the consent set.
-      //
-      // `??`, not `||` — though for ARRAYS the two agree, because `[]` is
-      // truthy in JS. The distinction is deliberate anyway: this merge shape
-      // extends to the boolean and string settings next to it, where `||`
-      // silently loses a configured `false` or `''` and inherits the platform's
-      // value instead. Using the operator that means "only when absent" keeps
-      // that from being a trap for whoever adds the next field.
-      keywords: channelSettings.keywords ?? policyKeywords,
-      keyterms: channelSettings.keyterms ?? policyKeyterms,
+      // The settings store is the ONLY keyword source since Track A step 8 —
+      // the session policy stopped carrying operational config. Absent means
+      // "nothing configured" and an explicit `[]` means "no boosts"; both
+      // reach RecordingSession as no boosts, so no merge is left here.
+      keywords: channelSettings.keywords,
+      keyterms: channelSettings.keyterms,
       resolveSpeakerName: (userId) => this.resolveSpeakerName(userId),
       onTranscriptFinal: (event: TranscriptFinalEvent) => this.onTranscript(event),
       onTranscriptInterim: (event: TranscriptInterimEvent) => this.onInterim(event),
