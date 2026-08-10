@@ -1,0 +1,35 @@
+{
+  "//": "Cross-repo contract fixture. Byte-identical copies live at cfg-server-disrecord/tests/unit/settings/fixtures/settings-contract.worlds.json and cfg-core-server/tests/unit/services/disrecord/fixtures/settings-contract.worlds.json. The container (cfg-server-disrecord/src/settings/settings-store.ts) is the source of truth; if a parser change turns either repo's contract test red, change BOTH parsers or neither.",
+  "version": 1,
+  "worlds": {
+    "100000000000000001": {
+      "name": "Contract Test Guild",
+      "defaults": {
+        "keywords": ["Strahd", "Barovia"],
+        "transcriptionEnabled": true,
+        "outputChannelId": "300000000000000003",
+        "threadNameTemplate": "{{voiceChannel}} - {{date}} - {{kind}}"
+      },
+      "scenes": {
+        "200000000000000002": {
+          "keywords": [],
+          "deepgramModel": "nova-3",
+          "outputThreadId": "400000000000000004"
+        },
+        "200000000000000009": {
+          "keyterms": ["Vistani"],
+          "transcriptionEnabled": false
+        }
+      },
+      "grants": [
+        {
+          "scope": "campaign",
+          "id": "contract-campaign-1",
+          "label": "Curse of the Contract",
+          "scenes": ["200000000000000002"],
+          "members": [{ "discordUserId": "500000000000000005", "seat": "gm" }]
+        }
+      ]
+    }
+  }
+}
