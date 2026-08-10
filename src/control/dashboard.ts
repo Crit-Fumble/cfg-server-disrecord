@@ -59,7 +59,8 @@ export function assertOpenSurfaceBindIsSafe(
   if (loopback || controlToken) return
   throw new Error(
     `refusing to serve the ${surface} on ${host} without CONTROL_TOKEN — ` +
-      'a non-loopback bind with no auth is an open recording surface. Set CONTROL_TOKEN or bind 127.0.0.1.',
+      'a non-loopback bind with no auth is an open recording surface. Set CONTROL_TOKEN, ' +
+      'or set CONTROL_HOST=127.0.0.1 (a container needs the wide bind, so set the token).',
   )
 }
 
