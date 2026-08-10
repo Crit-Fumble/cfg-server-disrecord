@@ -50,4 +50,26 @@ describe('dashboard HTML', () => {
       expect(script).toContain(path)
     }
   })
+
+  it('never offers the voice channel as the recording thread’s parent', () => {
+    // A recording is posted to a PRIVATE THREAD, and a thread's parent must be
+    // a standard text channel — `createRecordingThread` rejects anything else
+    // and `deliver()` then refuses to post at all. The old
+    // "Same as voice channel" option was the DEFAULT selection, so the
+    // documented click-path (README: open the dashboard, pick a server and a
+    // voice channel, Start) recorded a full session and posted nothing to
+    // Discord. Nothing failed loudly; the mp3 just never appeared.
+    expect(pageScript()).not.toContain('Same as voice channel')
+  })
+
+  it('refuses to start a recording with no text channel picked', () => {
+    const script = pageScript()
+    // The guard has to be in the start handler, next to the guild/voice one —
+    // a placeholder option alone would still POST an empty textChannelId.
+    const start = script.slice(script.indexOf("$('start').addEventListener"))
+    expect(start).toContain('!textChannelId')
+    // Guard the guard: if the slice ever misses, the assertion above would be
+    // checking an empty string.
+    expect(start).toContain('/v1/recordings')
+  })
 })

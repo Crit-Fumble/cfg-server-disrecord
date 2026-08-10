@@ -119,8 +119,9 @@ export const DASHBOARD_HTML = `<!doctype html>
         <select id="voice"></select>
       </div>
       <div class="field">
-        <label for="text">Transcript channel (optional)</label>
+        <label for="text">Transcript channel</label>
         <select id="text"></select>
+        <div class="hint">The recording thread is created here. Must be a text channel.</div>
       </div>
     </div>
     <div class="checkbox">
@@ -354,7 +355,10 @@ function renderChannels() {
   const prevText = text.value;
   voice.replaceChildren();
   text.replaceChildren();
-  text.appendChild(option('', 'Same as voice channel'));
+  // NOT "same as voice channel" — a recording is posted to a PRIVATE THREAD,
+  // and a thread's parent must be a standard text channel. Defaulting to the
+  // voice channel produced a session that recorded fine and posted nothing.
+  text.appendChild(option('', 'Choose a text channel…'));
   if (guild) {
     for (const c of guild.voiceChannels) voice.appendChild(option(c.id, c.name));
     for (const c of guild.textChannels) text.appendChild(option(c.id, '#' + c.name));
@@ -471,9 +475,13 @@ $('start').addEventListener('click', async () => {
   const button = $('start');
   const guildId = $('guild').value;
   const voiceChannelId = $('voice').value;
+  const textChannelId = $('text').value;
   if (!guildId || !voiceChannelId) { toast('Pick a server and a voice channel.', true); return; }
+  // Required: the recording thread needs a real text channel for a parent.
+  // Starting without one records a full session and posts nothing.
+  if (!textChannelId) { toast('Pick a text channel — the recording thread is created there.', true); return; }
   const body = { guildId: guildId, voiceChannelId: voiceChannelId, transcription: $('transcription').checked };
-  if ($('text').value) body.textChannelId = $('text').value;
+  body.textChannelId = textChannelId;
   button.disabled = true;
   button.textContent = 'Starting…';
   try {

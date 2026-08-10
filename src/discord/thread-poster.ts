@@ -109,7 +109,14 @@ export async function createRecordingThread(
   try {
     const channel = await client.channels.fetch(textChannelId)
     if (!channel || channel.type !== ChannelType.GuildText) {
-      logger.warn({ textChannelId }, 'thread parent is not a standard text channel — posting in channel')
+      // ⚠️ Not "posting in channel" — the caller REFUSES to fall back
+      // (session-controller's deliver()), because posting a recording outside
+      // a private thread is a privacy violation. Nothing reaches Discord.
+      logger.warn(
+        { textChannelId, channelType: channel?.type },
+        'thread parent is not a standard text channel — NOTHING will be posted to Discord for this recording ' +
+          '(a voice channel cannot parent a thread; pass a real text channel as textChannelId)',
+      )
       return null
     }
     const dateStr = new Date().toLocaleDateString('en-US', {
@@ -187,7 +194,11 @@ export async function createRecordingThread(
     )
     return thread.id
   } catch (err) {
-    logger.warn({ err, textChannelId }, 'thread creation failed — posting in channel')
+    logger.warn(
+      { err, textChannelId },
+      'thread creation failed — NOTHING will be posted to Discord for this recording ' +
+        '(check the bot\'s "Create Private Threads" permission on this channel)',
+    )
     return null
   }
 }
