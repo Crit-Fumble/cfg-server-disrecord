@@ -93,6 +93,13 @@ interface StartBody {
 interface ConsentBody {
   discordUserId?: string
   consented?: boolean
+  /**
+   * Persist the decision beyond this session (self-host only — CFG-hosted has
+   * no listener, core owns RecordingConsent). Mirrors the buttons: a DECLINE
+   * always persists regardless of this flag; a consent persists only when it
+   * is set, matching "Yes, and remember" vs "Yes, this time only".
+   */
+  remember?: boolean
 }
 
 /**
@@ -217,7 +224,7 @@ export async function startControlServer(params: ControlServerParams): Promise<F
       return reply.status(400).send({ error: 'discordUserId and consented are required' })
     }
     try {
-      service.pushConsent(id, body.discordUserId, body.consented)
+      service.pushConsent(id, body.discordUserId, body.consented, body.remember === true)
       return reply.status(204).send()
     } catch (err) {
       return notFoundOr500(reply, err, logger)

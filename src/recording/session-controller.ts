@@ -708,9 +708,16 @@ export class SessionController {
    * Both apply methods are idempotent, so the CFG-hosted bridge below can
    * safely re-apply the same update on its way to core-server bookkeeping.
    */
-  pushConsent(userId: string, consented: boolean): void {
-    if (consented) this.consent.applyConsent(userId)
-    else this.consent.applyDecline(userId)
+  pushConsent(userId: string, consented: boolean, remember = false): void {
+    // Route through the SAME rule the Discord buttons use, rather than poking
+    // the gate directly. Applying alone made every API decision this-session-
+    // only — declines included, which must always persist so someone who said
+    // no is not asked again next week.
+    //
+    // Self-host: the persistent-decision listener above writes the store.
+    // CFG-hosted: no listener is wired (core owns RecordingConsent), so this
+    // emits to nobody and the push behaves exactly as before.
+    this.consent.applyExternalDecision(userId, consented, remember)
     this.consentSync?.applyPushedUpdate(userId, consented)
   }
 
@@ -1007,6 +1014,8 @@ export class SessionController {
     status: SessionStatus
     startedAt: number
     speakerCount: number
+    /** Who has decided what, so an operator can act on a visible id. */
+    consent: { consented: string[]; pending: string[]; declined: string[] }
     paused: boolean
   } {
     return {
@@ -1016,6 +1025,13 @@ export class SessionController {
       status: this.status,
       startedAt: this.startedAt,
       speakerCount: this.pcmCapture?.speakerCount ?? 0,
+      // Who has decided what — so an operator can act on a NAME they can see
+      // instead of hand-typing a snowflake.
+      consent: {
+        consented: [...this.consent.consentedIds()],
+        pending: [...this.consent.pendingIds()],
+        declined: [...this.consent.declinedIds()],
+      },
       paused: this.status === 'paused',
     }
   }

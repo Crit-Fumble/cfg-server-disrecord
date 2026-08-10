@@ -15,6 +15,7 @@ import { SessionController } from './session-controller.js'
 import { SessionRegistry, GuildConflictError, SessionNotFoundError } from './session-registry.js'
 import { CoreServerClient } from '../phone-home/core-client.js'
 import type { SettingsStore } from '../settings/settings-store.js'
+import type { InteractionDelivery } from '../gateway/interaction-delivery.js'
 import type { Client } from 'discord.js'
 import type { OutputSink } from './output-sink.js'
 import type { StandaloneConfig } from '../config.js'
@@ -49,6 +50,11 @@ export class RecordingService {
    * when self-host. Shared by every SessionController this service spawns.
    */
   private readonly core: CoreServerClient
+  /**
+   * How Discord delivers this app's interactions. Null when unknown or
+   * CFG-hosted (where core owns the endpoint and this question is moot).
+   */
+  private interactionDelivery: InteractionDelivery | null = null
 
   constructor(
     private readonly client: Client,
@@ -62,6 +68,11 @@ export class RecordingService {
     private readonly settingsStore: SettingsStore,
   ) {
     this.core = new CoreServerClient(config.cfg, logger.child({ module: 'core-client' }))
+  }
+
+  /** Recorded at boot so `diagnostics()` can warn where an operator is looking. */
+  setInteractionDelivery(delivery: InteractionDelivery | null): void {
+    this.interactionDelivery = delivery
   }
 
   /** True once the Discord client is connected and ready. */
@@ -148,8 +159,8 @@ export class RecordingService {
    * Apply a consent update pushed by core-server (CFG-hosted control API).
    * Throws {@link SessionNotFoundError} when the recording isn't active.
    */
-  pushConsent(recordingId: string, discordUserId: string, consented: boolean): void {
-    this.require(recordingId).pushConsent(discordUserId, consented)
+  pushConsent(recordingId: string, discordUserId: string, consented: boolean, remember = false): void {
+    this.require(recordingId).pushConsent(discordUserId, consented, remember)
   }
 
   /**
@@ -248,6 +259,13 @@ export class RecordingService {
     guildCount: number
     intents: string[]
     activeRecordings: number
+    /**
+     * `http` means this app's interactions go to `interactionsEndpointUrl` and
+     * the consent BUTTONS CANNOT FIRE here. Surfaced so the dashboard can say
+     * so where a human is looking, not only in the boot log.
+     */
+    interactionRoute: 'gateway' | 'http' | 'unknown' | null
+    interactionsEndpointUrl: string | null
   } {
     return {
       botReady: this.botReady,
@@ -255,6 +273,8 @@ export class RecordingService {
       guildCount: this.client.guilds.cache.size,
       intents: this.client.options.intents.toArray(),
       activeRecordings: this.activeCount,
+      interactionRoute: this.interactionDelivery?.route ?? null,
+      interactionsEndpointUrl: this.interactionDelivery?.endpointUrl ?? null,
     }
   }
 

@@ -164,6 +164,42 @@ export class ConsentManager {
     return new Set(this.consented)
   }
 
+  /**
+   * Who is still undecided, and who said no.
+   *
+   * Surfaced so an operator can see WHO to act on. Without it the dashboard
+   * could only report a speaker count and ask for a raw snowflake typed by
+   * hand, which is the kind of surface nobody uses under time pressure.
+   */
+  pendingIds(): Set<string> {
+    return new Set(this.pending)
+  }
+
+  declinedIds(): Set<string> {
+    return new Set(this.declined)
+  }
+
+  /**
+   * Apply a decision that came from somewhere other than the Discord buttons —
+   * the control API, and the dashboard on top of it.
+   *
+   * ⚠️ This exists because `applyConsent`/`applyDecline` alone are NOT the
+   * whole act. They open or close the audio gate for THIS session and nothing
+   * more, so every decision made through the API was silently this-session-
+   * only — including declines, which are supposed to persist unconditionally
+   * so someone who has said no is not asked again next week. That is the same
+   * shape as the "Yes, and remember" button doing nothing, one path over.
+   *
+   * Routes through the identical rule the buttons use ({@link
+   * emitPersistentDecision}), so the two paths cannot drift: decline always
+   * persists; consent persists only when `remember` is set.
+   */
+  applyExternalDecision(userId: string, consented: boolean, remember = false): void {
+    if (consented) this.applyConsent(userId)
+    else this.applyDecline(userId)
+    this.emitPersistentDecision(userId, consented ? 'consent' : 'decline', remember)
+  }
+
   /** Register a callback fired when a user transitions to consented. */
   onConsent(listener: ConsentListener): void {
     this.consentListeners.push(listener)

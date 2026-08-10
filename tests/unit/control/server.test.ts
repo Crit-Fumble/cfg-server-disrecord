@@ -183,7 +183,21 @@ describe('control server', () => {
         payload: { discordUserId: 'u1', consented: true },
       })
       expect(res.statusCode).toBe(204)
-      expect(service.pushConsent).toHaveBeenCalledWith('r1', 'u1', true)
+      // `remember` defaults false — matching "Yes, this time only". A DECLINE
+      // still persists regardless; that rule lives in the consent manager.
+      expect(service.pushConsent).toHaveBeenCalledWith('r1', 'u1', true, false)
+    })
+
+    it('POST /v1/recordings/:id/consent forwards remember:true', async () => {
+      const service = fakeService()
+      app = await makeServer(service)
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/recordings/r1/consent',
+        payload: { discordUserId: 'u1', consented: true, remember: true },
+      })
+      expect(res.statusCode).toBe(204)
+      expect(service.pushConsent).toHaveBeenCalledWith('r1', 'u1', true, true)
     })
 
     it('POST /v1/recordings/:id/consent 400s on a malformed body', async () => {
@@ -225,6 +239,7 @@ describe('control server', () => {
         status: 'recording' as const,
         startedAt: 123,
         speakerCount: 2,
+        consent: { consented: ['u1'], pending: ['u2'], declined: [] },
         paused: false,
       }
       const service = fakeService({ describe: jest.fn(() => snapshot) })

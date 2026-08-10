@@ -135,6 +135,8 @@ const DASHBOARD_HTML = `<!doctype html>
   .empty { color: var(--muted); font-size: 0.9rem; }
   .status { display: flex; flex-wrap: wrap; gap: 0.4rem 1rem; font-size: 0.88rem; }
   .status b { font-weight: 600; }
+  .banner { flex: 1 1 100%; border: 1px solid var(--danger); color: var(--danger);
+            border-radius: 8px; padding: 0.6rem 0.8rem; font-size: 0.86rem; line-height: 1.45; }
   #toast { position: fixed; left: 50%; bottom: 1.25rem; transform: translateX(-50%);
     background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
     padding: 0.6rem 1rem; font-size: 0.88rem; max-width: 90vw; display: none; }
@@ -292,6 +294,20 @@ function renderStatus(d) {
   add('Bot', d.botReady ? (d.botTag || 'ready') : 'not ready');
   add('Servers', String(d.guildCount));
   add('Recording', String(d.activeRecordings));
+  // ⚠️ The single most confusing failure this container has: consent buttons
+  // that silently do nothing because Discord routes interactions to an HTTP
+  // endpoint instead of the gateway. Say it where a human is looking, not only
+  // in the boot log they will never scroll back to.
+  if (d.interactionRoute === 'http') {
+    const warn = el('div', 'banner');
+    warn.appendChild(el('b', null, 'Consent buttons cannot fire. '));
+    warn.appendChild(document.createTextNode(
+      'This Discord application sends interactions to ' + (d.interactionsEndpointUrl || 'an HTTP endpoint') +
+      ', not over the gateway, so clicks never reach this container and recordings capture silence. ' +
+      'Use an application with no Interactions Endpoint URL, or grant consent below.'
+    ));
+    box.appendChild(warn);
+  }
   const intents = el('span', 'empty', 'Intents: ' + d.intents.join(', '));
   intents.title =
     'Privileged intents (GuildMembers, MessageContent) must be enabled in the Discord Developer Portal. ' +
@@ -370,6 +386,37 @@ function renderRecordings() {
     stop.onclick = () => act(r.recordingId, 'stop');
     row.appendChild(stop);
     box.appendChild(row);
+
+    // One row per speaker the session has seen, so an operator acts on an id
+    // that is IN FRONT OF THEM. The form below still takes a hand-typed
+    // snowflake for anyone not yet seen; this is for everyone who is.
+    const c = r.consent || { consented: [], pending: [], declined: [] };
+    const seen = [
+      ...c.pending.map((id) => [id, 'pending']),
+      ...c.consented.map((id) => [id, 'consented']),
+      ...c.declined.map((id) => [id, 'declined']),
+    ];
+    for (const [uid, state] of seen) {
+      const sub = el('div', 'rec');
+      const who = el('div', 'meta');
+      who.appendChild(el('code', null, uid));
+      who.appendChild(el('div', 'sub', state === 'pending'
+        ? 'undecided — audio is being DROPPED until someone allows it'
+        : state === 'consented' ? 'audio is captured' : 'audio is dropped'));
+      sub.appendChild(who);
+      sub.appendChild(el('span', state === 'consented' ? 'pill live' : 'pill', state));
+
+      const allow = el('button', null, 'Allow');
+      allow.disabled = state === 'consented';
+      allow.onclick = () => consentFor(r.recordingId, uid, true);
+      sub.appendChild(allow);
+
+      const skip = el('button', 'danger', 'Skip');
+      skip.disabled = state === 'declined';
+      skip.onclick = () => consentFor(r.recordingId, uid, false);
+      sub.appendChild(skip);
+      box.appendChild(sub);
+    }
   }
   if (prevPick) picker.value = prevPick;
 }
@@ -414,6 +461,26 @@ $('start').addEventListener('click', async () => {
     refresh();
   }
 });
+
+/**
+ * Grant or revoke for ONE user on ONE recording, from the per-speaker rows.
+ *
+ * remember is deliberately false: these buttons mirror "Yes, this time only".
+ * A DECLINE still persists regardless — that rule lives in the container, not
+ * here, so the two consent surfaces cannot drift.
+ */
+async function consentFor(recordingId, discordUserId, consented) {
+  try {
+    await api('/v1/recordings/' + encodeURIComponent(recordingId) + '/consent', {
+      method: 'POST',
+      body: JSON.stringify({ discordUserId: discordUserId, consented: consented }),
+    });
+    toast(consented ? 'Consent granted.' : 'Consent revoked.');
+    refresh();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
 
 async function consent(consented) {
   const id = $('consentRec').value;
