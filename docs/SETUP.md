@@ -61,9 +61,21 @@ share a token whichever connects second wins.
 
 1. Open the **OAuth2** tab (under Overview, not Activities)
 2. Click **Reset Secret** → copy + save. This is the `client_secret`.
-3. The **Redirects** field stays empty. The Activity OAuth flow uses RPC,
-   not the redirect-URI redirect flow. Adding URLs here doesn't help
-   Activity authorization.
+3. **Redirects depends on which flow you are setting up — this is a real fork,
+   not a formality.**
+
+   | you are setting up | Redirects field |
+   |---|---|
+   | the Discord **Activity** only (CFG-hosted) | leave it **empty** — the Activity OAuth flow uses RPC, not the redirect-URI flow, so URLs here do nothing |
+   | a **self-hosted stack** where people sign in through a browser | you **must** add `<baseUrl>/api/auth/callback/discord` — without it Discord rejects the sign-in and no one can reach the app |
+
+   ⚠️ This section previously said the Redirects field always stays empty. That
+   is correct for the Activity flow and **wrong** for self-host web sign-in,
+   where it is the difference between a working install and one nobody can log
+   in to. The OAuth scope for that flow is `identify email guilds`.
+
+   One Discord application can serve both sign-in and the recorder, provided no
+   Interactions Endpoint URL is set on it.
 
 ### 4. Activities → URL Mappings
 
