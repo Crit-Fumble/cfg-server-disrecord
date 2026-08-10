@@ -50,8 +50,15 @@ You need a Discord bot and (optionally) a Deepgram API key.
    DEEPGRAM_API_KEY=<deepgram key>   # omit for record-only (no transcript)
    OUTPUT_DIR=/data/recordings
    CONTROL_PORT=8080
-   # CONTROL_TOKEN=<random secret>   # optional bearer auth for the HTTP API
+   CONTROL_TOKEN=<random secret>     # REQUIRED when running the container
    ```
+
+   ⚠️ `CONTROL_TOKEN` is required in Docker, not optional. The image binds the
+   control server to `0.0.0.0` because a loopback bind inside a container is
+   unreachable through `docker run -p` — Docker forwards to the container's
+   eth0, not its loopback. A reachable surface must be authenticated, so the
+   container refuses to boot on a wide bind without a token. Running from source
+   on bare metal keeps the `127.0.0.1` default, where the token stays optional.
 
 4. **Run the container** (`serve` is the default `CMD`):
 

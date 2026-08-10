@@ -95,7 +95,10 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
   const control = await startControlServer({
     service,
     port: config.controlPort,
-    host: cfgHosted ? '0.0.0.0' : '127.0.0.1',
+    // CFG-hosted always binds wide so core-server can reach the published port.
+    // Self-host takes CONTROL_HOST, which the image sets to 0.0.0.0 because a
+    // loopback bind inside a container is unreachable through `docker run -p`.
+    host: cfgHosted ? '0.0.0.0' : config.controlHost,
     authenticate: createControlAuthenticator({ cfg: config.cfg, controlToken: config.controlToken }),
     // Self-host gets the built-in dashboard (#9) so a solo operator can drive
     // the container without first building a frontend. CFG-hosted never does —

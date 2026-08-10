@@ -61,6 +61,21 @@ export interface StandaloneConfig {
   deepgramModel: string
   /** Deepgram transcription language. Defaults to 'en'. */
   deepgramLanguage: string
+  /**
+   * Interface the control server binds. Default `127.0.0.1` — safe for a
+   * bare-metal run, and the reason "no CONTROL_TOKEN ⇒ open" is defensible.
+   *
+   * ⚠️ IN A CONTAINER THIS MUST BE `0.0.0.0`. A process bound to the
+   * container's loopback is unreachable through Docker's port publishing,
+   * which forwards to the container's eth0 address — so `-p 8080:8080` reaches
+   * nothing and the dashboard and control API are dead. The image therefore
+   * defaults this to `0.0.0.0`, and `assertOpenSurfaceBindIsSafe` refuses to
+   * boot on a wide bind without `CONTROL_TOKEN`.
+   *
+   * Ignored when CFG-hosted, which always binds `0.0.0.0` so core-server can
+   * reach the published port.
+   */
+  controlHost: string
   /** Local directory finalized mp3 + VTT land in. Default `/data/recordings`. */
   outputDir: string
   /**
@@ -283,6 +298,7 @@ export function resolveStandaloneConfig(): StandaloneConfig {
     settingsPath: optionalEnv('DISRECORD_SETTINGS_PATH', '/data/disrecord/worlds.json'),
     keepPcm: keepPcmRequested && cfg == null,
     controlPort,
+    controlHost: optionalEnv('CONTROL_HOST', '127.0.0.1'),
     controlToken: process.env.CONTROL_TOKEN || undefined,
     logLevel: optionalEnv('LOG_LEVEL', 'info'),
     chunkMinutes,

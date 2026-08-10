@@ -69,6 +69,18 @@ ENV NODE_ENV=production
 # The HTTP control server runs on this port (default 8080). Local-only it
 # binds 127.0.0.1 — publish it with `-p 127.0.0.1:8080:8080`; CFG-hosted it
 # binds 0.0.0.0 with JWT auth.
+# ⛔ A loopback bind inside a container is unreachable through `docker run -p`:
+# Docker forwards to the container's eth0, not its loopback. Shipping the app's
+# bare-metal default here produced a container that booted, connected to
+# Discord, reported healthy from inside — and served nothing at all to the host.
+# The dashboard and the entire control API were dead, so there was no way to
+# start a recording.
+#
+# `assertOpenSurfaceBindIsSafe` is what keeps this honest: with a wide bind the
+# container REFUSES to boot unless CONTROL_TOKEN is set. Publishing a port makes
+# the surface reachable, so it has to be authenticated.
+ENV CONTROL_HOST=0.0.0.0
+
 EXPOSE 8080
 
 # Finalized recordings land here — mount a volume so they survive the
