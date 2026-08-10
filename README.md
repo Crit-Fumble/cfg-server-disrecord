@@ -33,9 +33,23 @@ You need a Discord bot and (optionally) a Deepgram API key.
 1. **Create a Discord bot** at <https://discord.com/developers/applications>.
    On the **Bot** tab, enable the **Server Members Intent** and **Message
    Content Intent**. Copy the **bot token**.
-2. **Invite the bot** to your server with the `bot` scope and the
-   **Connect**, **Speak**, **Send Messages**, and **Create Public Threads**
-   permissions.
+2. **Invite the bot** to your server with the `bot` scope and these permissions:
+
+   | Permission | Why |
+   |---|---|
+   | **Connect** | join the voice channel to capture audio |
+   | **View Channel** + **Send Messages** | post the consent prompt and the thread |
+   | **Create Private Threads** | ⚠️ **required** — recordings go to a *private* thread, always |
+   | **Attach Files** | upload the finished mp3 and the VTT transcript |
+   | **Manage Webhooks** | per-speaker live captions (without it they fall back to plain bot messages) |
+   | **Manage Threads** *(optional)* | lets the thread be created non-invitable |
+
+   ⚠️ **"Create Public Threads" is NOT enough, and it is the mistake that costs
+   you a whole session.** A recording is posted to a private thread and there is
+   deliberately no public fallback — posting a recording publicly is a privacy
+   violation regardless of surface. Without **Create Private Threads** the bot
+   still joins, still records, and still writes the mp3 to disk, but **nothing
+   is ever posted to Discord**; the only trace is one line in the container log.
    ⚠️ **Do NOT set an Interactions Endpoint URL on this application.** Discord
    delivers interactions over the gateway *or* by HTTP to that URL — the two
    are mutually exclusive — and the consent buttons rely on the gateway. With a
@@ -67,9 +81,28 @@ You need a Discord bot and (optionally) a Deepgram API key.
      --env-file .env \
      -p 127.0.0.1:8080:8080 \
      -v disrecord-data:/data/recordings \
+     -v disrecord-config:/data/disrecord \
      -e TZ=America/Chicago \
      cfg-server-disrecord:local serve
    ```
+
+   ⚠️ **Both mounts matter, and they must be these two exact paths.**
+   `/data/recordings` holds recordings *and* the remembered-consent store;
+   `/data/disrecord` holds your settings (keywords, thread-name templates,
+   per-channel config). Settings live outside the recordings volume on purpose
+   — recordings are the artifact you sync, prune or hand to someone else, and
+   configuration should not be swept along with them.
+
+   Without the second mount your settings sit in the container's writable
+   layer: they survive `docker restart`, and are **silently gone** the moment
+   you `docker rm` and recreate — which is what every image upgrade does.
+   Keyword boosts are the most visible loss, since the settings file is their
+   only source.
+
+   ⚠️ Do **not** try to collapse these into a single `-v vol:/data`. The image
+   declares `VOLUME ["/data/recordings"]`, which shadows any bind that is not
+   at that exact path, so a `/data` mount would silently lose every recording
+   to an anonymous volume.
 
    `TZ` (any IANA zone) sets the timezone user-visible dates render in —
    most visibly the `{{date}}` in recording-thread names. The image defaults
@@ -166,6 +199,10 @@ no platform to be useful. The model is Foundry-shaped — **a guild is a world, 
 voice channel is a scene**, and a scene inherits its world's defaults field by
 field, overriding only what it names.
 
+The document lives at `/data/disrecord/worlds.json` (override with
+`DISRECORD_SETTINGS_PATH`). ⚠️ **Mount that directory** — see the quickstart
+above; unmounted, everything here is lost on the next container recreate.
+
 ```
 GET    /v1/worlds                              → { worlds: { <guildId>: { defaults, scenes, grants? } } }
 GET    /v1/worlds/:guildId                     → one world (404 if unconfigured)
@@ -195,8 +232,13 @@ self-host gets per-channel Deepgram boosts for the first time.
 left verbatim, so a typo shows up in the title instead of vanishing. Unset keeps
 the built-in `<voice channel> - <date> - <kind>`.
 
-The remaining fields are stored faithfully but not yet read by the recording
-path.
+⚠️ **Only those three are read by the recording path today** — `keywords`,
+`keyterms` and `threadNameTemplate`. `transcriptionEnabled`, `deepgramModel`,
+`deepgramLanguage`, `outputChannelId` and `outputThreadId` are accepted,
+validated and stored faithfully, and a scene read returns them, but nothing
+consumes them yet: setting `transcriptionEnabled: false` does **not** turn
+transcription off. Use the per-recording `transcription` flag on
+`POST /v1/recordings` (the dashboard's checkbox) for that.
 
 A scene read returns **both** `effective` (what a recording will actually use)
 and `override` (only what this channel sets itself) — rendering the resolved

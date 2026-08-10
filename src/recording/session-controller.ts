@@ -1027,8 +1027,8 @@ export class SessionController {
     // same place live captions streamed into. If start-time thread creation
     // failed (`threadId === null`), we DO NOT fall back to the parent
     // channel — posting a recording publicly is a privacy violation
-    // regardless of surface. The recording remains in object storage for
-    // out-of-band retrieval; the operator gets a loud log to triage.
+    // regardless of surface. The audio is already written to the sink, so
+    // nothing is lost; the operator gets a loud, actionable log.
     if (!this.threadId) {
       this.logger.error(
         {
@@ -1036,7 +1036,10 @@ export class SessionController {
           guildId: this.guildId,
           textChannelId: p.textChannelId,
         },
-        'recording NOT posted: no private thread was created at session start (bot likely missing Create Private Threads). Recording remains in object storage.',
+        'recording NOT posted to Discord: no private thread was created at session start. ' +
+          'Two usual causes: the bot is missing the "Create Private Threads" permission, or ' +
+          'textChannelId is not a standard text channel (a voice channel cannot parent a thread). ' +
+          'The audio is safe — self-host writes it under OUTPUT_DIR, CFG-hosted keeps it in object storage.',
       )
       return
     }
