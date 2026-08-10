@@ -69,7 +69,28 @@ git tag "v$(node -p "require('./package.json').version")" origin/main
 git push origin --tags
 ```
 
-**4. Refresh the prod host** — the step tagging does not do (see above).
+**4. Verify the publish actually happened.** ⚠️ Do NOT skip this, and do not
+treat a pushed tag as a shipped release.
+
+The `verify` job refuses to publish on three independent conditions (see the
+table below), and **every one of them fails AFTER the tag is pushed**, in a
+workflow nobody is required to watch. A refused publish leaves `:latest` on the
+PREVIOUS image while the tag exists and looks successful — so anything
+downstream that assumes the new worker is live is now wrong, silently.
+
+```sh
+# the run must be SUCCESS, not just present
+gh run list --repo Crit-Fumble/cfg-server-disrecord --workflow release.yml --limit 3
+
+# and :latest must actually carry the new version
+gh api /orgs/Crit-Fumble/packages/container/cfg-server-disrecord/versions \
+  --jq '.[0].metadata.container.tags'
+```
+
+There is **no** step 5. Do not `docker pull` on the prod host — `imagePull:
+'always'` means the next recording pulls it, and the ⚠️ note above explains why
+that step was removed. If you are holding an older checklist, this is the step
+it told you to run; drop it.
 
 ## What the workflow refuses to publish
 
