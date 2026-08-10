@@ -67,8 +67,15 @@ You need a Discord bot and (optionally) a Deepgram API key.
      --env-file .env \
      -p 127.0.0.1:8080:8080 \
      -v disrecord-data:/data/recordings \
+     -e TZ=America/Chicago \
      cfg-server-disrecord:local serve
    ```
+
+   `TZ` (any IANA zone) sets the timezone user-visible dates render in —
+   most visibly the `{{date}}` in recording-thread names. The image defaults
+   to UTC, so without it an evening session is titled with **tomorrow's**
+   date for anyone west of Greenwich. An invalid value silently degrades
+   back to UTC; it never fails a recording.
 
 5. **Record.** Open <http://127.0.0.1:8080/> for the built-in dashboard, or
    drive the container over the HTTP control API (or the bundled CLI).
