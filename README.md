@@ -10,6 +10,11 @@ HTTP control API. If you want slash commands, build your own bot that drives
 this container — **ReSesh** (in `cfg-core-server` / `cfg-core-browser`) is the
 reference implementation.
 
+> ℹ️ **Those CFG repos are private.** They are named for orientation throughout this README,
+> not as links you can open. **Nothing here depends on them** — the self-hosted mode below is
+> the whole product, and every phone-home path is a clean no-op when the CFG env vars are
+> absent.
+
 One Docker image, one `serve` mode that runs in two configurations from the
 same build:
 
