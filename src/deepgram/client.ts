@@ -60,7 +60,7 @@ function redactDeepgramUrlForLog(url: string): string {
 }
 // Deepgram closes idle WebSocket connections after a ~10-12s inactivity
 // timeout. The 2026-05-12 prod session log shows 9 mid-session closes
-// across a 2-hour D&D session — every silence longer than ~10s triggered
+// across a 2-hour TTRPG session — every silence longer than ~10s triggered
 // a reconnect, each costing 1-3s of WS handshake on the next utterance
 // before audio could resume streaming. See cfg-core-server #63.
 //
@@ -109,7 +109,7 @@ export function buildDeepgramUrl(options: DeepgramStreamOptions = {}): string {
   // `model=nova-3` causes Deepgram to reject the WebSocket handshake
   // with HTTP 400, which silently bricks transcription for every
   // campaign-bound session (composeTranscriptionKeywords always
-  // produces single-word boosts in the `keywords` channel for D&D-style
+  // produces single-word boosts in the `keywords` channel for TTRPG-style
   // proper-noun sets). For Nova-3 we fold any `keywords` into the
   // keyterm list with the `:boost` suffix stripped — Nova-3's keyterm
   // boost is fixed at the API level and doesn't honor per-term weights.

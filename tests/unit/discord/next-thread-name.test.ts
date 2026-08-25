@@ -26,7 +26,7 @@ describe('nextThreadName', () => {
   })
 
   it('escapes regex metacharacters in channel names', () => {
-    const spicy = 'D&D (Tuesdays) [main] - Aug 7, 2026 - Recording'
+    const spicy = 'Swords & Sorcery (Tuesdays) [main] - Aug 7, 2026 - Recording'
     expect(nextThreadName(spicy, [spicy])).toBe(`${spicy} 2`)
     expect(nextThreadName('a.c - x', ['abc - x'])).toBe('a.c - x')
   })

@@ -208,7 +208,7 @@ describe('Deepgram URL contract — production worker config', () => {
 
   it('keeps the production-config URL under a typical reverse-proxy cap with realistic keyterms', () => {
     // Deepgram doesn't document a URL length limit, but reverse proxies
-    // cap somewhere between 4–16 KB. Realistic D&D-style keyterms run
+    // cap somewhere between 4–16 KB. Realistic TTRPG-style keyterms run
     // ~10-15 chars (proper nouns, item names). 500 of those plus the
     // ~250-char base URL stays well under 16 KB.
     const realistic = Array.from({ length: 500 }, (_, i) => `name-${i}`)
@@ -326,7 +326,7 @@ reachabilityDescribe('Deepgram URL reachability (opt-in)', () => {
       vadEvents: true,
       // Mix of keywords (folded into keyterm with :boost stripped)
       // and explicit keyterms — same shape composeTranscriptionKeywords
-      // produces for a real D&D campaign.
+      // produces for a real TTRPG campaign.
       keywords: ['Gandalf:5', 'Fireball:3', 'Longsword:2', 'Aragorn:5', 'Mithril:3'],
       keyterms: ['ancient red dragon', 'kick em in the unmentionables'],
     })
