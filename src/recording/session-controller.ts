@@ -675,9 +675,13 @@ export class SessionController {
     void this.params.core.postParticipants(discordUserIds)
   }
 
-  private async reportThread(threadId: string, parentChannelId: string | null): Promise<void> {
+  private async reportThread(
+    threadId: string,
+    parentChannelId: string | null,
+    attachmentUploaded?: boolean,
+  ): Promise<void> {
     if (!this.params.cfg) return
-    await this.params.core.postRecordingThread(threadId, parentChannelId).catch((err: unknown) => {
+    await this.params.core.postRecordingThread(threadId, parentChannelId, attachmentUploaded).catch((err: unknown) => {
       this.logger.warn({ err, recordingId: this.recordingId, threadId }, 'thread report failed')
     })
   }
@@ -1047,7 +1051,7 @@ export class SessionController {
       { recordingId: this.recordingId, threadId: this.threadId, mp3Bytes: result.sizeBytes },
       '[deliver] posting recording to thread',
     )
-    await postRecording(
+    const posted = await postRecording(
       p.client,
       this.threadId,
       this.recordingId,
@@ -1058,9 +1062,20 @@ export class SessionController {
       this.logger,
     )
     this.logger.info(
-      { recordingId: this.recordingId, threadId: this.threadId },
-      '[deliver] postRecording returned (mp3 + VTT posted)',
+      { recordingId: this.recordingId, threadId: this.threadId, posted },
+      '[deliver] postRecording returned',
     )
+
+    // cs#352: tell core the MP3 actually landed in this thread, so its forum
+    // sync stops posting a duplicate artifact link. ONLY on a full post —
+    // the flag is monotonic core-side, so a partial/failed upload sends
+    // nothing rather than false. parentChannelId is resent because core
+    // writes `recordingThreadParentId: body.parentChannelId ?? null` —
+    // omitting it would silently null the stored parent. Best-effort via
+    // reportThread (warn-and-continue): a failed report never fails delivery.
+    if (posted) {
+      await this.reportThread(this.threadId, p.textChannelId, true)
+    }
 
     // End-of-session "Back to Top" link. Anchors on the session-start
     // announcement (first message in the thread) so users can jump back

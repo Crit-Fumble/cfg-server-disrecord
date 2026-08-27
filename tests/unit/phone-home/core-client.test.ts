@@ -64,6 +64,12 @@ describe('CoreServerClient — self-host (no CFG config)', () => {
     expect(await client.fetchDeepgramToken()).toBeNull()
     expect(fetchSpy).not.toHaveBeenCalled()
   })
+
+  it('postRecordingThread is a no-op and never calls fetch', async () => {
+    const client = new CoreServerClient(undefined, logger)
+    await client.postRecordingThread('thread-1', 'chan-1', true)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
 })
 
 describe('CoreServerClient — CFG-hosted', () => {
@@ -173,6 +179,46 @@ describe('CoreServerClient — CFG-hosted', () => {
     const client = new CoreServerClient(HOSTED, logger)
     const result = await client.postBillingTick({ resourceType: 'server_uptime', minutes: 1, label: 'x' })
     expect(result).toEqual({ insufficientCoins: false })
+  })
+
+  // ── cs#352: deliver-time attachment report-back ───────────────────────────
+  it('postRecordingThread POSTs threadId + parentChannelId without attachmentUploaded when omitted', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    const client = new CoreServerClient(HOSTED, logger)
+    await client.postRecordingThread('thread-1', 'chan-1')
+    const [url, opts] = fetchSpy.mock.calls[0]
+    expect(String(url)).toBe('http://core:3001/api/v1/recording/thread')
+    expect((opts as RequestInit).headers).toMatchObject({ authorization: 'Bearer jwt-token' })
+    const body = JSON.parse((opts as RequestInit).body as string)
+    expect(body).toEqual({ installationId: 'inst-1', threadId: 'thread-1', parentChannelId: 'chan-1' })
+    expect(body).not.toHaveProperty('attachmentUploaded')
+  })
+
+  it('postRecordingThread includes attachmentUploaded:true when the flag is set', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    const client = new CoreServerClient(HOSTED, logger)
+    await client.postRecordingThread('thread-1', 'chan-1', true)
+    const [, opts] = fetchSpy.mock.calls[0]
+    expect(JSON.parse((opts as RequestInit).body as string)).toEqual({
+      installationId: 'inst-1',
+      threadId: 'thread-1',
+      parentChannelId: 'chan-1',
+      attachmentUploaded: true,
+    })
+  })
+
+  it('postRecordingThread NEVER sends attachmentUploaded:false (monotonic flag)', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+    const client = new CoreServerClient(HOSTED, logger)
+    await client.postRecordingThread('thread-1', 'chan-1', false)
+    const [, opts] = fetchSpy.mock.calls[0]
+    expect(JSON.parse((opts as RequestInit).body as string)).not.toHaveProperty('attachmentUploaded')
+  })
+
+  it('postRecordingThread swallows a non-2xx response (best-effort)', async () => {
+    fetchSpy = jest.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 500 }))
+    const client = new CoreServerClient(HOSTED, logger)
+    await expect(client.postRecordingThread('thread-1', 'chan-1', true)).resolves.toBeUndefined()
   })
 
   it('postTranscript swallows a non-2xx response', async () => {

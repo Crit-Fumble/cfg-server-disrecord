@@ -206,6 +206,12 @@ export async function createRecordingThread(
 /**
  * Upload a finalized recording (mp3 + optional VTT) into `channelId`,
  * splitting the mp3 into Discord-uploadable parts when it's over the cap.
+ *
+ * Returns `true` ONLY when every part uploaded (cs#352 — the caller reports
+ * "attachment landed in Discord" home on a true, and core's duplicate-link
+ * guard is monotonic). Every silent-failure exit — unsendable target, split
+ * failure, per-part upload failure — returns `false`; a partial multi-part
+ * upload is `false`.
  */
 export async function postRecording(
   client: Client,
@@ -216,11 +222,11 @@ export async function postRecording(
   captions: CaptionEntry[],
   redactedSpeakerIds: Set<string>,
   logger: Logger,
-): Promise<void> {
+): Promise<boolean> {
   const channel = await client.channels.fetch(channelId).catch(() => null)
   if (!channel || !channel.isSendable()) {
     logger.warn({ channelId, recordingId }, 'post target not sendable — recording not posted')
-    return
+    return false
   }
 
   const totalDurationSec = result.durationMs / 1000
@@ -258,7 +264,7 @@ export async function postRecording(
       await (channel as GuildTextBasedChannel).send(
         `**Recording too large to embed** — recording id \`${recordingId}\` (${(result.sizeBytes / 1_048_576).toFixed(1)} MB).`,
       )
-      return
+      return false
     }
   } else {
     parts = [result.mp3Path]
@@ -312,10 +318,11 @@ export async function postRecording(
       await (channel as GuildTextBasedChannel)
         .send(`**Recording part ${i + 1} too large** — recording id \`${recordingId}\`.`)
         .catch(() => {})
-      return
+      return false
     }
   }
   logger.info({ recordingId, channelId, total }, 'recording posted to Discord')
+  return true
 }
 
 /** Format a second offset as `mm:ss` for chunk headers. */

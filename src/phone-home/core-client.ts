@@ -167,15 +167,30 @@ export class CoreServerClient {
    *
    * Best-effort, like every other report here: losing it costs thread reuse on
    * the next start, never the recording in progress.
+   *
+   * `attachmentUploaded` (cs#352) rides the same envelope at deliver time,
+   * reporting the fact "the MP3 landed in Discord" so core can suppress its
+   * duplicate forum artifact link. The flag is monotonic: it is sent ONLY as
+   * the literal `true` and omitted otherwise, so a later plain thread report
+   * (e.g. a restart's start-time report) can never reset it core-side.
    */
-  async postRecordingThread(threadId: string, parentChannelId: string | null): Promise<void> {
+  async postRecordingThread(
+    threadId: string,
+    parentChannelId: string | null,
+    attachmentUploaded?: boolean,
+  ): Promise<void> {
     if (!this.cfg) return
     const url = this.url('/api/v1/recording/thread')
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify({ installationId: this.cfg.installationId, threadId, parentChannelId }),
+        body: JSON.stringify({
+          installationId: this.cfg.installationId,
+          threadId,
+          parentChannelId,
+          ...(attachmentUploaded === true ? { attachmentUploaded: true } : {}),
+        }),
       })
       if (!res.ok) {
         this.logger?.warn({ status: res.status, threadId }, 'recording-thread POST non-2xx')
