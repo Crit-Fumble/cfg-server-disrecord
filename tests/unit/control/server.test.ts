@@ -241,6 +241,11 @@ describe('control server', () => {
         speakerCount: 2,
         consent: { consented: ['u1'], pending: ['u2'], declined: [] },
         paused: false,
+        scheduledEndAt: null,
+        discordEventId: null,
+        humansPresent: 2,
+        endPromptPosted: false,
+        stopReason: null,
       }
       const service = fakeService({ describe: jest.fn(() => snapshot) })
       app = await makeServer(service)

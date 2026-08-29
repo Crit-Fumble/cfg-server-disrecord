@@ -8,10 +8,12 @@
  *                Auth is the per-session JWT (see `control/auth.ts`).
  *
  * API:
- *   POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription?, threadId? } → { recordingId }
+ *   POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription?, threadId?,
+ *                                     scheduledEndAt?, discordEventId? } → { recordingId }
  *   POST /v1/recordings/:id/pause  → 204
  *   POST /v1/recordings/:id/resume → 204
  *   POST /v1/recordings/:id/stop   → 200   (blocks until delivery complete)
+ *   POST /v1/recordings/:id/prompt-end → 204  (post the "Session over? [End recording]" prompt)
  *   POST /v1/recordings/:id/consent { discordUserId, consented } → 204  (CFG-hosted consent push)
  *   GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused }
  *   GET  /v1/recordings            → [ ... ]
@@ -88,6 +90,10 @@ interface StartBody {
   invokerUserId?: string
   /** Reuse this thread instead of creating one — see StartRecordingRequest. */
   threadId?: string
+  /** ISO scheduled end of the session — see StartRecordingRequest. */
+  scheduledEndAt?: string
+  /** The Discord scheduled event this recording belongs to — see StartRecordingRequest. */
+  discordEventId?: string
 }
 
 interface ConsentBody {
@@ -167,6 +173,8 @@ export async function startControlServer(params: ControlServerParams): Promise<F
         threadId: body.threadId,
         transcription: body.transcription,
         invokerUserId: body.invokerUserId,
+        scheduledEndAt: typeof body.scheduledEndAt === 'string' ? body.scheduledEndAt : undefined,
+        discordEventId: typeof body.discordEventId === 'string' ? body.discordEventId : undefined,
       })
       return reply.status(201).send({ recordingId })
     } catch (err) {
@@ -209,6 +217,20 @@ export async function startControlServer(params: ControlServerParams): Promise<F
       // timeout (10 min in core-server's controlStop) bounds the wait.
       await service.stop(id)
       return reply.status(200).send()
+    } catch (err) {
+      return notFoundOr500(reply, err, logger)
+    }
+  })
+
+  // The platform's relay for "the Discord event ended": post the one-button
+  // end prompt into the thread. The worker decides what happens next (a click
+  // ends it; unanswered, it ends only if the channel is empty) — see
+  // SessionController.promptEnd. Idempotent while a prompt is on screen.
+  app.post('/v1/recordings/:id/prompt-end', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    try {
+      await service.promptEnd(id, 'event-ended')
+      return reply.status(204).send()
     } catch (err) {
       return notFoundOr500(reply, err, logger)
     }
