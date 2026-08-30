@@ -18,6 +18,11 @@
  *        Mints a short-lived Deepgram grant token for platform-mode
  *        transcription (the platform key never enters the container).
  *
+ *   POST /api/v1/recording/ended
+ *        Every stop, whoever started it, with the reason. This is the report
+ *        that closes the loop for stops the platform did not issue (a human
+ *        disconnecting the bot, an empty channel, the end-prompt button).
+ *
  * Blank-slate-boot contract: the client is constructed from the optional
  * {@link CfgHostedConfig}. When that config is `undefined` (no
  * `CORE_SERVER_URL`), every method is a clean, synchronous no-op — it never
@@ -86,6 +91,29 @@ export interface ChunkMetadataPayload {
   discordMessageId?: string
   discordChannelId?: string
 }
+
+/**
+ * Why a recording stopped, as reported home. The platform keys its own
+ * bookkeeping off this (which reasons mean "the table is over"), so the set
+ * is shared with cfg-core-server's `/api/v1/recording/ended` route.
+ */
+export type RecordingEndReason =
+  | 'control-stop'
+  | 'user-button'
+  | 'channel-empty'
+  | 'scheduled-end'
+  | 'event-ended'
+  | 'bot-disconnected'
+  | 'insufficient-coins'
+  | 'shutdown'
+
+/**
+ * How long the end report may wait on core. The report is posted from
+ * inside the stop pipeline, and core's handler may itself be awaiting THIS
+ * worker's stop (a platform-issued stop reports home too) — a bound here is
+ * what keeps that from ever becoming a deadlock, whatever core does.
+ */
+const ENDED_REPORT_TIMEOUT_MS = 10_000
 
 /** Empty policy used both as the no-op return and the unreachable-core fallback. */
 const EMPTY_POLICY: SessionPolicy = { consentedUserIds: [], speakerNames: {} }
@@ -238,6 +266,43 @@ export class CoreServerClient {
       }
     } catch (err) {
       this.logger?.warn({ err, count: unique.length }, 'participants POST threw')
+    }
+  }
+
+  /**
+   * Report that this recording has ended, and why.
+   *
+   * Sent on EVERY stop — including the ones core issued itself, which core
+   * handles idempotently. The report that matters is the one for a stop core
+   * did not issue: before it existed, a human disconnecting the bot ended the
+   * worker cleanly and the platform never learned, so the session stayed
+   * "active" for days and the idle worker held the guild's recording slot
+   * (cfg-core-server#366).
+   *
+   * Best-effort, like every other report here, and time-bounded (see
+   * {@link ENDED_REPORT_TIMEOUT_MS}). A core that predates the route answers
+   * 404, which is logged and otherwise ignored — the worker must be safe to
+   * ship ahead of the platform half.
+   */
+  async postRecordingEnded(reason: RecordingEndReason): Promise<void> {
+    if (!this.cfg) return
+    const url = this.url('/api/v1/recording/ended')
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify({ installationId: this.cfg.installationId, reason }),
+        signal: AbortSignal.timeout(ENDED_REPORT_TIMEOUT_MS),
+      })
+      if (res.status === 404) {
+        this.logger?.info({ reason }, 'recording-ended report: core has no /recording/ended route (older core) — ignored')
+        return
+      }
+      if (!res.ok) {
+        this.logger?.warn({ status: res.status, reason }, 'recording-ended POST non-2xx')
+      }
+    } catch (err) {
+      this.logger?.warn({ err, reason }, 'recording-ended POST threw')
     }
   }
 

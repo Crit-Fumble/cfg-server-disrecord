@@ -11,7 +11,7 @@
  */
 
 import { nanoid } from './nanoid.js'
-import { SessionController } from './session-controller.js'
+import { SessionController, type EndPromptTrigger, type StopReason } from './session-controller.js'
 import { SessionRegistry, GuildConflictError, SessionNotFoundError } from './session-registry.js'
 import { CoreServerClient } from '../phone-home/core-client.js'
 import type { SettingsStore } from '../settings/settings-store.js'
@@ -41,6 +41,21 @@ export interface StartRecordingRequest {
    * (core-server) decides which thread that is; the worker just honours it.
    */
   threadId?: string
+  /**
+   * ISO timestamp of the session's scheduled end, from the platform's
+   * calendar. Drives the worker's scheduled-end prompt; absent or unparsable
+   * ⇒ no such prompt (self-hosters are unaffected).
+   */
+  scheduledEndAt?: string
+  /** The Discord scheduled event this recording belongs to, if any. Informational. */
+  discordEventId?: string
+}
+
+/** Parse the optional scheduled end; anything that is not a real future-or-past instant is "none". */
+export function parseScheduledEndAt(raw: string | undefined): Date | null {
+  if (typeof raw !== 'string' || raw.length === 0) return null
+  const d = new Date(raw)
+  return Number.isFinite(d.getTime()) ? d : null
 }
 
 export class RecordingService {
@@ -130,6 +145,16 @@ export class RecordingService {
       keepPcmDir: this.config.keepPcm ? this.config.outputDir : undefined,
       invokerUserId: req.invokerUserId,
       existingThreadId: req.threadId ?? null,
+      scheduledEndAt: parseScheduledEndAt(req.scheduledEndAt),
+      discordEventId: req.discordEventId ?? null,
+      // A stop the WORKER decided on (bot kicked, channel empty, end button)
+      // must leave the registry the same way a control-API stop does — or
+      // the guild slot stays held and /healthz keeps reporting a recording
+      // that ended hours ago. Fires after the pipeline has fully completed.
+      onStopped: (reason: StopReason) => {
+        this.registry.remove(recordingId)
+        this.logger.info({ recordingId, reason }, 'recording stopped — registry slot released')
+      },
       cfg: this.config.cfg,
       consentStorePath: this.config.consentStorePath,
       settingsStore: this.settingsStore,
@@ -181,12 +206,22 @@ export class RecordingService {
   async stop(recordingId: string): Promise<void> {
     const controller = this.require(recordingId)
     try {
-      await controller.stop()
+      await controller.stop('control-stop')
     } catch (err) {
       this.logger.error({ err, recordingId }, 'session stop failed')
     } finally {
       this.registry.remove(recordingId)
     }
+  }
+
+  /**
+   * Post the end prompt for a recording — the platform's relay for "the
+   * Discord event ended" (`POST /v1/recordings/:id/prompt-end`). Throws
+   * {@link SessionNotFoundError} when the recording isn't active; a prompt
+   * already on screen makes this a no-op.
+   */
+  async promptEnd(recordingId: string, trigger: EndPromptTrigger = 'event-ended'): Promise<void> {
+    await this.require(recordingId).promptEnd(trigger)
   }
 
   /** Snapshot of one session, or null when it isn't active. */
@@ -283,7 +318,7 @@ export class RecordingService {
     const all = this.registry.list()
     await Promise.allSettled(
       all.map(async (c) => {
-        await c.stop().catch((err) => this.logger.error({ err }, 'stopAll: session stop failed'))
+        await c.stop('shutdown').catch((err) => this.logger.error({ err }, 'stopAll: session stop failed'))
         this.registry.remove(c.recordingId)
       }),
     )

@@ -186,7 +186,8 @@ POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transc
 POST /v1/recordings/:id/pause  → 204
 POST /v1/recordings/:id/resume → 204
 POST /v1/recordings/:id/stop   → 200   (BLOCKS until mix + upload + Discord post finish)
-GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused }
+POST /v1/recordings/:id/prompt-end → 204  (post the "Session over? [End recording]" prompt)
+GET  /v1/recordings/:id        → { status, startedAt, speakerCount, paused, humansPresent, … }
 GET  /v1/recordings            → [ ... ]
 GET  /v1/guilds                → { guilds: [ { id, name, voiceChannels, textChannels } ] }   (self-host)
 GET  /v1/diagnostics           → { botReady, botTag, guildCount, intents, activeRecordings } (self-host)
@@ -196,6 +197,31 @@ GET  /healthz                  → { ok, botReady, activeRecordings }
 `stop` is deliberately synchronous: whoever calls it is usually about to kill
 the container, so returning early would cut delivery off mid-upload. Budget a
 generous client timeout — a long session takes minutes to mix and upload.
+
+`POST /v1/recordings` also accepts `scheduledEndAt` (ISO) and
+`discordEventId`; both are optional and only feed the lifecycle below.
+
+### When a recording ends on its own
+
+The worker is the thing in the voice channel, so it decides when the table is
+over — nobody has to remember to stop it:
+
+- **Empty channel.** Five minutes with no humans (bots never count) posts
+  `Session over? [End recording]` in the thread; ten minutes ends the
+  recording. Anyone rejoining cancels both.
+- **Scheduled end.** When `scheduledEndAt` passes, the same prompt appears.
+  If nobody clicks within ten minutes it ends **only if the channel is empty
+  by then** — a table still talking past its scheduled end keeps recording,
+  and the worker looks again every five minutes; the first look that finds
+  the channel empty ends it. The button never expires.
+- **Bot disconnected.** Removing the bot from voice ends the recording the
+  normal way (mix, VTT, thread post).
+- **The button.** Clicking `End recording` ends it immediately and rewrites
+  the prompt to say who did.
+
+CFG-hosted, every stop is reported to the platform with its reason
+(`POST /api/v1/recording/ended`) so the session bookkeeping there can never
+outlive the recording. Self-host reports nothing.
 
 ### Settings
 

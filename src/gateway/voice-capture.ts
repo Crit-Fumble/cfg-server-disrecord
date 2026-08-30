@@ -69,6 +69,26 @@ export function classifyOwnRemoval(params: {
     : `moved to another voice channel by a user (${newChannelId})`
 }
 
+/**
+ * The HUMAN occupants of a voice channel, from its member collection.
+ *
+ * Pulled out as a pure function because it is the whole occupancy rule the
+ * end-of-session timers depend on: bots (this one and any other) never count
+ * as "someone is still here". A music bot parked in the channel must not keep
+ * a recording alive after the last player leaves. Accepts the discord.js
+ * `Collection` (a Map subclass) or any iterable of `[id, member]` pairs.
+ */
+export function humanMemberIds(
+  members: Iterable<[string, { user?: { bot?: boolean } | null } | null | undefined]>,
+): string[] {
+  const ids: string[] = []
+  for (const [id, member] of members) {
+    if (member?.user?.bot) continue
+    ids.push(id)
+  }
+  return ids
+}
+
 export class VoiceJoinError extends Error {
   constructor(message: string, public readonly cause?: unknown) {
     super(message)
@@ -102,6 +122,17 @@ export interface VoiceCaptureParams {
    * Absent ⇒ nobody is told (self-host, which has no core-server to tell).
    */
   onParticipant?: (userId: string) => void
+  /**
+   * Called with the current HUMAN occupants of the recorded channel whenever
+   * its membership changes (a join, a leave, a move in or out). Bots are
+   * excluded — see {@link humanMemberIds}. This is the worker-side signal
+   * behind "end after N minutes empty": the worker is IN the room, so it can
+   * answer "is anyone still here?" without a REST round-trip and without the
+   * fail-closed 403 that once auto-paused a full channel platform-side.
+   *
+   * Absent ⇒ occupancy is not tracked.
+   */
+  onOccupancyChanged?: (humanUserIds: string[]) => void
   logger: Logger
 }
 
@@ -228,6 +259,12 @@ export class VoiceCapture {
           }
           return
         }
+        // Occupancy: any change that touches OUR channel (a join, a leave, a
+        // move in or out) re-reports who is left. Evaluated BEFORE the
+        // join-only filters below, which deliberately drop leaves.
+        if (oldState.channelId === voiceChannelId || newState.channelId === voiceChannelId) {
+          this.emitOccupancy()
+        }
         if (oldState.channelId === voiceChannelId) return // already here / left from here
         if (newState.channelId !== voiceChannelId) return // not joining our channel
         if (newState.member?.user?.bot) return // skip bot members (including ourselves)
@@ -257,6 +294,27 @@ export class VoiceCapture {
 
     this.connection = connection
     logger.info({ guildId, voiceChannelId }, 'voice channel joined; capturing audio')
+  }
+
+  /**
+   * The human occupants of the recorded channel RIGHT NOW, from the gateway
+   * cache. Empty when the channel is not cached (never joined, or the cache
+   * was evicted) — callers treat that as "unknown", not "empty", by seeding
+   * from a REST fetch at start instead.
+   */
+  currentOccupancy(): string[] {
+    const channel = this.params.client.channels.cache.get(this.params.voiceChannelId)
+    if (!channel || !channel.isVoiceBased()) return []
+    return humanMemberIds(channel.members)
+  }
+
+  private emitOccupancy(): void {
+    if (!this.params.onOccupancyChanged) return
+    const channel = this.params.client.channels.cache.get(this.params.voiceChannelId)
+    // A missing cache entry is "unknown", never "empty" — reporting [] here
+    // would start the empty-channel clock on a cache miss.
+    if (!channel || !channel.isVoiceBased()) return
+    this.params.onOccupancyChanged(humanMemberIds(channel.members))
   }
 
   /**

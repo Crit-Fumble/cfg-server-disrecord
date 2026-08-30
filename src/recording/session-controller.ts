@@ -11,14 +11,53 @@
  *   start()  → mkdir temp → join voice (capture ASAP) → create thread + wire consent surface
  *   pause()  → gate audio + transcription
  *   resume() → un-gate
- *   stop()   → leave voice → finalize PCM → mix → VTT → sink → post thread
+ *   stop()   → leave voice → finalize PCM → mix → VTT → sink → post thread → report home
+ *
+ * ## The worker owns the end of the session (cfg-server-disrecord#74)
+ *
+ * Three things decide a recording is over without the platform saying so, and
+ * all three live here because the worker is the one IN the voice channel:
+ *
+ *   - **Empty channel.** Humans gone for {@link EMPTY_PROMPT_AFTER_MS} → an
+ *     end prompt in the thread; gone for {@link EMPTY_END_AFTER_MS} → stop.
+ *     A rejoin cancels both. Bots never count as company.
+ *   - **Scheduled end.** `scheduledEndAt` (from the platform's calendar) →
+ *     the same prompt; unanswered for {@link END_PROMPT_TIMEOUT_MS} it ends
+ *     ONLY if the channel is empty by then. A full table that ignores the
+ *     prompt keeps recording, and the worker looks again every
+ *     {@link END_PROMPT_RECHECK_MS} — the first look that finds the channel
+ *     empty ends it (owner decision 2026-08-29). The button never expires.
+ *   - **Bot disconnected.** A human removing the bot from voice is an
+ *     instruction; the recording ends the normal way.
+ *
+ * The prompt is addressed to the host/GM (the invoker) and carries one
+ * button, `End recording`. It ends the RECORDING; ending the game session or
+ * the Discord event stays a human act on the platform side (owner decision
+ * 2026-08-29 — no auto-ending of Discord events at this phase). Self-host: the click reaches
+ * this process over the gateway. CFG-hosted: Discord delivers it to the
+ * platform's interactions endpoint instead, which stops the recording over
+ * the control API — so the button works in both modes without the worker
+ * needing to know which one it is in.
+ *
+ * Every stop, whoever asked for it, is reported home with its reason
+ * ({@link StopReason}) so the platform's bookkeeping can never again outlive
+ * the recording (cfg-core-server#366).
  */
 
 import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
-import { ActivityType, type Client } from 'discord.js'
-import { VoiceCapture } from '../gateway/voice-capture.js'
+import {
+  ActionRowBuilder,
+  ActivityType,
+  ButtonBuilder,
+  ButtonStyle,
+  MessageFlags,
+  type ButtonInteraction,
+  type Client,
+  type Interaction,
+} from 'discord.js'
+import { VoiceCapture, humanMemberIds } from '../gateway/voice-capture.js'
 import { PcmCapture } from './pcm-capture.js'
 import { ActiveTimeMeter } from './active-time-meter.js'
 import { RecordingSession, type TranscriptFinalEvent, type TranscriptInterimEvent } from './recording-session.js'
@@ -32,7 +71,7 @@ import { createRecordingThread, postChunk, postRecording, tempDirOf } from '../d
 import { SpeakerWebhookManager } from '../discord/speaker-webhook.js'
 import { ConsentSync } from '../phone-home/consent-sync.js'
 import { CaptionAccumulator } from './caption-accumulator.js'
-import type { CoreServerClient } from '../phone-home/core-client.js'
+import type { CoreServerClient, RecordingEndReason } from '../phone-home/core-client.js'
 import type { CfgHostedConfig } from '../config.js'
 import type { OutputSink } from './output-sink.js'
 import type { Logger } from '../logger.js'
@@ -45,6 +84,61 @@ const BILLING_TICK_MINUTES = 15
 
 /** Discord per-message character cap. */
 const DISCORD_MESSAGE_MAX_CHARS = 2000
+
+/**
+ * Empty-channel timeline (owner decision 2026-08-29): post the end prompt
+ * after 5 minutes with no humans, end the recording after 10. Long enough
+ * that a whole-table wifi blip or a bio break does not end a session; short
+ * enough that an empty channel is never recorded (and billed) for an hour.
+ */
+const EMPTY_PROMPT_AFTER_MS = 5 * 60_000
+const EMPTY_END_AFTER_MS = 10 * 60_000
+/**
+ * How long a prompt posted for a scheduled/event end waits for a click
+ * before the worker decides for itself — and it only decides "end" when the
+ * channel is empty at that point. See the class doc.
+ */
+const END_PROMPT_TIMEOUT_MS = 10 * 60_000
+/**
+ * After an unanswered prompt found people still present: how often to look
+ * again. Each look re-reads the channel over REST rather than trusting the
+ * last gateway delta, so a missed voice-state event cannot keep an empty
+ * channel recording.
+ */
+const END_PROMPT_RECHECK_MS = 5 * 60_000
+/** `setTimeout` overflows past this and fires immediately — clamp long waits. */
+const MAX_TIMER_MS = 2 ** 31 - 1
+
+/** Why a recording stopped. Reported home verbatim — see `RecordingEndReason`. */
+export type StopReason = RecordingEndReason
+
+/** What put the end prompt on screen. Decides its wording and its timeout. */
+export type EndPromptTrigger = 'channel-empty' | 'scheduled-end' | 'event-ended'
+
+/** Test seam for the lifecycle clocks. Production leaves every field unset. */
+export interface LifecycleTimings {
+  emptyPromptMs?: number
+  emptyEndMs?: number
+  promptTimeoutMs?: number
+  promptRecheckMs?: number
+}
+
+const END_PROMPT_TEXT: Record<EndPromptTrigger, string> = {
+  'channel-empty': 'Looks like everyone has left. Session over?',
+  'scheduled-end': 'The scheduled end time has passed. Session over?',
+  'event-ended': 'The Discord event has ended. Session over?',
+}
+
+const END_RESOLVED_TEXT: Record<StopReason, string> = {
+  'channel-empty': 'Recording ended — everyone left.',
+  'scheduled-end': 'Recording ended — the scheduled end time passed and nobody kept it going.',
+  'event-ended': 'Recording ended — the Discord event ended.',
+  'bot-disconnected': 'Recording ended — the bot was disconnected from voice.',
+  'insufficient-coins': 'Recording ended — out of Crit-Coin.',
+  'user-button': 'Recording ended.',
+  'control-stop': 'Recording ended.',
+  shutdown: 'Recording ended.',
+}
 
 /** Wrap text in Discord italic markers — used for the "being said" interim render. */
 function italic(text: string): string {
@@ -113,6 +207,30 @@ export interface SessionControllerParams {
    * already has one — which is what stops a restart producing a duplicate.
    */
   existingThreadId?: string | null
+  /**
+   * When the platform's calendar says this session ends. Drives the
+   * scheduled-end prompt; absent (self-host, or an unscheduled recording)
+   * means no such prompt. A time already in the past at start is ignored —
+   * people who start recording after the scheduled end are clearly still
+   * playing.
+   */
+  scheduledEndAt?: Date | null
+  /**
+   * The Discord scheduled event this recording belongs to, when there is
+   * one. Informational — surfaced in `describe()` for ops; the worker never
+   * calls Discord's events API itself.
+   */
+  discordEventId?: string | null
+  /**
+   * Called exactly once, after the stop pipeline has fully completed, with
+   * why the recording stopped. The service uses it to drop a self-stopped
+   * session from its registry — without it a recording the WORKER ended
+   * (bot kicked, channel empty) stayed registered, held the guild slot, and
+   * reported `activeRecordings: 1` from an idle process.
+   */
+  onStopped?: (reason: StopReason) => void
+  /** Test seam — see {@link LifecycleTimings}. */
+  timings?: LifecycleTimings
   /**
    * CFG-hosted config. Present ⇒ the controller wires billing ticks,
    * consent-sync, and transcript phone-home. Absent ⇒ pure self-host.
@@ -232,6 +350,22 @@ export class SessionController {
    * promise so SIGTERM actually waits for the post-process to finish.
    */
   private stopInFlight: Promise<void> | null = null
+  /** Why this recording is stopping / stopped. First caller of stop() wins. */
+  private stopReason: StopReason | null = null
+
+  // ── Recording lifecycle (see the class doc) ────────────────────────────
+  /** Humans in the channel per the last occupancy report; null = never reported. */
+  private humansPresent: number | null = null
+  private emptyPromptTimer: NodeJS.Timeout | null = null
+  private emptyEndTimer: NodeJS.Timeout | null = null
+  private scheduledEndTimer: NodeJS.Timeout | null = null
+  private promptTimeoutTimer: NodeJS.Timeout | null = null
+  /** Armed once an unanswered prompt found people present; looks again on a cadence. */
+  private promptRecheckTimer: NodeJS.Timeout | null = null
+  /** The live end prompt, if one is on screen. Cleared once it is resolved. */
+  private endPrompt: { messageId: string; channelId: string; trigger: EndPromptTrigger } | null = null
+  /** Gateway listener for the end button (self-host delivery). Detached on stop. */
+  private endPromptHandler: ((interaction: Interaction) => void) | null = null
 
   /**
    * Per-speaker webhook caption state. Each speaker posts via their own
@@ -433,12 +567,14 @@ export class SessionController {
       // fire-and-forget keeps us off the gateway event loop.
       onExplicitDisconnect: (reason) => {
         this.logger.info({ recordingId: this.recordingId, reason }, 'ending recording — bot was removed from voice')
-        void this.stop()
+        void this.stop('bot-disconnected')
       },
       // Late joiner is in the room — put them on core's participant roster.
       // Unconditional, and separate from consent: the roster is what lets
       // them reach this session's recording afterwards.
       onParticipant: (userId) => this.reportParticipants([userId]),
+      // Who is left in the room, on every join/leave — the empty-channel clock.
+      onOccupancyChanged: (humanIds) => this.handleOccupancy(humanIds),
       logger: this.logger,
     })
 
@@ -575,6 +711,17 @@ export class SessionController {
     void this.webhookManager.init()
 
     this.status = 'recording'
+
+    // ── Recording lifecycle: who is here now, and when the table should end.
+    // The end button's gateway listener is attached whatever the mode; in
+    // CFG-hosted the click never arrives here (Discord delivers it to the
+    // platform's interactions endpoint), so it is simply a listener that
+    // never fires. Seeded from a REST read rather than the gateway cache so
+    // an uncached channel reads as "empty" only when it really is.
+    this.endPromptHandler = (interaction) => this.onEndPromptInteraction(interaction)
+    p.client.on('interactionCreate', this.endPromptHandler)
+    this.handleOccupancy(await this.humanVoiceMemberIds(p.client))
+    this.armScheduledEnd()
 
     // Surface a recording indicator on the bot's presence/activity so
     // members see "🔴 Recording session" under ReSesh in the member list.
@@ -807,7 +954,7 @@ export class SessionController {
     // caller (the awaited server_uptime POST inside stop()'s final tick, OR the
     // periodic timer) returns promptly rather than awaiting the whole
     // mix/upload/post pipeline.
-    void this.stop()
+    void this.stop('insufficient-coins')
   }
 
   /**
@@ -815,9 +962,12 @@ export class SessionController {
    * store via the sink, and post the result into Discord. Runs to
    * completion — callers that need a fast HTTP response should not await it.
    */
-  async stop(): Promise<void> {
+  async stop(reason: StopReason = 'control-stop'): Promise<void> {
     if (this.status === 'stopped') return
     if (this.stopInFlight) return this.stopInFlight
+    // The first caller's reason is THE reason — a platform stop that lands
+    // while a channel-empty stop is already running does not rewrite history.
+    this.stopReason ??= reason
     this.stopInFlight = this.runStop()
     try {
       await this.stopInFlight
@@ -830,11 +980,21 @@ export class SessionController {
     if (this.status === 'stopped' || this.status === 'stopping') return
     this.status = 'stopping'
     const rid = this.recordingId
+    const reason: StopReason = this.stopReason ?? 'control-stop'
     // Numbered checkpoint logs so a hung / failed stop is easy to triage
     // from production logs without having to instrument later. Every
     // step that does external I/O (Discord, ffmpeg, object storage)
     // gets its own log line so the breakpoint is visible.
-    this.logger.info({ recordingId: rid }, '[runStop] 0/9 stopping')
+    this.logger.info({ recordingId: rid, reason }, '[runStop] 0/9 stopping')
+
+    // Lifecycle first: no timer may fire a second stop mid-pipeline, and the
+    // end prompt (if one is up) says what happened while the gateway is
+    // still connected to say it.
+    this.clearLifecycleTimers()
+    this.detachEndPrompt()
+    await this.resolveEndPrompt(reason).catch((err) =>
+      this.logger.warn({ err, recordingId: rid }, 'end prompt resolution failed (best-effort)'),
+    )
 
     this.consent.stop()
     this.clearRecordingPresence()
@@ -930,10 +1090,297 @@ export class SessionController {
       }
       if (this.status !== 'failed') this.status = 'stopped'
       this.logger.info(
-        { recordingId: rid, status: this.status },
+        { recordingId: rid, status: this.status, reason },
         '[runStop] 9/9 recording session stopped',
       )
+
+      // Close the loop with the platform — the report that was missing when
+      // a kicked bot ended cleanly and core kept the session "active" for
+      // days. Time-bounded + best-effort inside the client; never throws.
+      await this.reportEnded(reason)
+      try {
+        this.params.onStopped?.(reason)
+      } catch (err) {
+        this.logger.warn({ err, recordingId: rid }, 'onStopped callback threw')
+      }
     }
+  }
+
+  // ── Recording lifecycle ──────────────────────────────────────────────────
+
+  /**
+   * Post the end prompt — `Session over? [End recording]` — into the thread
+   * (or the text channel when there is no thread). One prompt at a time: a
+   * second trigger while one is on screen is a no-op, so the channel-empty
+   * and scheduled-end paths cannot stack messages.
+   *
+   * Public because the platform relays "the Discord event ended" through the
+   * control API (`POST /v1/recordings/:id/prompt-end`). A scheduled-end or
+   * event-ended prompt arms {@link END_PROMPT_TIMEOUT_MS}; the channel-empty
+   * one does not — its end is the empty clock itself.
+   */
+  async promptEnd(trigger: EndPromptTrigger): Promise<void> {
+    if (this.status !== 'recording' && this.status !== 'paused') return
+    if (this.endPrompt) return
+    const channelId = this.threadId ?? this.params.textChannelId
+    try {
+      const channel = await this.params.client.channels.fetch(channelId)
+      if (!channel || !channel.isSendable()) {
+        this.logger.warn({ recordingId: this.recordingId, channelId, trigger }, 'end prompt: channel not sendable')
+        return
+      }
+      // Addressed to the host/GM when we know them (the invoker, or the
+      // auto-start host) — the prompt is theirs to answer. Everyone in the
+      // thread still sees it.
+      const mention = this.params.invokerUserId ? `<@${this.params.invokerUserId}> ` : ''
+      const msg = await channel.send({ content: `${mention}${END_PROMPT_TEXT[trigger]}`, components: this.buildEndPromptRow() })
+      this.endPrompt = { messageId: msg.id, channelId, trigger }
+      this.logger.info({ recordingId: this.recordingId, trigger, messageId: msg.id }, 'end prompt posted')
+    } catch (err) {
+      this.logger.warn({ err, recordingId: this.recordingId, trigger }, 'end prompt post failed')
+      return
+    }
+    if (trigger === 'channel-empty') return
+    const timeoutMs = this.params.timings?.promptTimeoutMs ?? END_PROMPT_TIMEOUT_MS
+    this.clearTimer('promptTimeoutTimer')
+    this.promptTimeoutTimer = this.after(timeoutMs, () => void this.onEndPromptTimeout(trigger))
+  }
+
+  /**
+   * The prompt went unanswered. End only if nobody is left — a table that is
+   * still talking past its scheduled end has answered by staying. Otherwise
+   * say so, leave the button up (it never expires), and look again every
+   * {@link END_PROMPT_RECHECK_MS}; the first look that finds the channel
+   * empty ends the recording.
+   */
+  private async onEndPromptTimeout(trigger: EndPromptTrigger): Promise<void> {
+    this.promptTimeoutTimer = null
+    if (!this.endPrompt || this.endPrompt.trigger !== trigger) return
+    if (this.humansPresent === 0) {
+      this.logger.info({ recordingId: this.recordingId, trigger }, 'end prompt unanswered and channel empty — ending')
+      void this.stop(trigger)
+      return
+    }
+    this.logger.info(
+      { recordingId: this.recordingId, trigger, humansPresent: this.humansPresent },
+      'end prompt unanswered but people are still here — recording continues, looking again on a cadence',
+    )
+    await this.editEndPrompt(
+      'Still recording — press **End recording** when you are done.',
+      this.buildEndPromptRow(),
+    )
+    const recheckMs = this.params.timings?.promptRecheckMs ?? END_PROMPT_RECHECK_MS
+    this.clearRecheck()
+    const timer = setInterval(() => void this.recheckAfterPrompt(trigger), recheckMs)
+    timer.unref()
+    this.promptRecheckTimer = timer
+  }
+
+  /**
+   * One look after an unanswered prompt. Reads the channel over REST (not the
+   * cached delta) so a missed gateway event cannot keep an empty channel
+   * recording, feeds the result through the normal occupancy path, and ends
+   * the recording if nobody is there.
+   */
+  private async recheckAfterPrompt(trigger: EndPromptTrigger): Promise<void> {
+    if (this.status !== 'recording' && this.status !== 'paused') {
+      this.clearRecheck()
+      return
+    }
+    const humans = await this.humanVoiceMemberIds(this.params.client)
+    this.handleOccupancy(humans)
+    if (humans.length > 0) {
+      this.logger.info({ recordingId: this.recordingId, trigger, humans: humans.length }, 'post-prompt look: people still here')
+      return
+    }
+    this.logger.info({ recordingId: this.recordingId, trigger }, 'post-prompt look found the channel empty — ending')
+    this.clearRecheck()
+    void this.stop(trigger)
+  }
+
+  private clearRecheck(): void {
+    if (this.promptRecheckTimer) clearInterval(this.promptRecheckTimer)
+    this.promptRecheckTimer = null
+  }
+
+  /** Occupancy report from VoiceCapture (and the REST seed at start). */
+  private handleOccupancy(humanIds: string[]): void {
+    if (this.status === 'stopping' || this.status === 'stopped' || this.status === 'failed') return
+    const before = this.humansPresent
+    this.humansPresent = humanIds.length
+    if (humanIds.length > 0) {
+      if (before === 0 || this.emptyEndTimer) {
+        this.logger.info({ recordingId: this.recordingId, humans: humanIds.length }, 'channel occupied again — empty clock cancelled')
+      }
+      this.clearTimer('emptyPromptTimer')
+      this.clearTimer('emptyEndTimer')
+      if (this.endPrompt?.trigger === 'channel-empty') {
+        const prompt = this.endPrompt
+        this.endPrompt = null
+        void this.editMessage(prompt.channelId, prompt.messageId, "Someone's back — recording continues.", [])
+      }
+      return
+    }
+    // Empty. Arm the clock once; repeated "still empty" reports (mute/deafen
+    // churn from nobody, cache refreshes) must not push the deadline out.
+    if (this.emptyEndTimer) return
+    const promptMs = this.params.timings?.emptyPromptMs ?? EMPTY_PROMPT_AFTER_MS
+    const endMs = this.params.timings?.emptyEndMs ?? EMPTY_END_AFTER_MS
+    this.logger.info({ recordingId: this.recordingId, promptMs, endMs }, 'channel empty — end clock armed')
+    this.emptyPromptTimer = this.after(promptMs, () => {
+      this.emptyPromptTimer = null
+      void this.promptEnd('channel-empty')
+    })
+    this.emptyEndTimer = this.after(endMs, () => {
+      this.emptyEndTimer = null
+      this.logger.info({ recordingId: this.recordingId }, 'channel empty for the full window — ending')
+      void this.stop('channel-empty')
+    })
+  }
+
+  private armScheduledEnd(): void {
+    const at = this.params.scheduledEndAt
+    if (!at) return
+    const delay = at.getTime() - Date.now()
+    if (!Number.isFinite(delay) || delay <= 0) {
+      this.logger.info({ recordingId: this.recordingId, scheduledEndAt: at.toISOString() }, 'scheduled end already passed at start — ignored')
+      return
+    }
+    this.scheduledEndTimer = this.after(Math.min(delay, MAX_TIMER_MS), () => {
+      this.scheduledEndTimer = null
+      void this.promptEnd('scheduled-end')
+    })
+  }
+
+  private endPromptCustomId(): string {
+    // Same key the consent buttons use: installationId in CFG-hosted (what
+    // the platform's handler expects), the local recordingId in self-host.
+    return `end_recording:${this.params.cfg?.installationId ?? this.recordingId}`
+  }
+
+  private buildEndPromptRow(): ActionRowBuilder<ButtonBuilder>[] {
+    return [
+      new ActionRowBuilder<ButtonBuilder>().addComponents(
+        new ButtonBuilder()
+          .setCustomId(this.endPromptCustomId())
+          .setLabel('End recording')
+          .setStyle(ButtonStyle.Danger)
+          .setEmoji('⏹️'),
+      ),
+    ]
+  }
+
+  /** Gateway delivery of the end button (self-host). */
+  private onEndPromptInteraction(interaction: Interaction): void {
+    if (!interaction.isButton() || interaction.customId !== this.endPromptCustomId()) return
+    void this.handleEndPromptClick(interaction)
+  }
+
+  private async handleEndPromptClick(interaction: ButtonInteraction): Promise<void> {
+    if (this.status === 'stopping' || this.status === 'stopped') {
+      await interaction.reply({ content: 'This recording is already ending.', flags: MessageFlags.Ephemeral }).catch(() => undefined)
+      return
+    }
+    const member = interaction.member as { displayName?: string } | null
+    const name = member?.displayName || interaction.user.displayName || interaction.user.username
+    this.logger.info({ recordingId: this.recordingId, userId: interaction.user.id }, 'end button clicked — ending recording')
+    // One call acks the click AND rewrites the prompt, so the button is gone
+    // before the (minutes-long) stop pipeline runs.
+    await interaction
+      .update({ content: `Recording ended by ${name}.`, components: [] })
+      .catch((err) => this.logger.warn({ err, recordingId: this.recordingId }, 'end button ack failed'))
+    this.endPrompt = null
+    void this.stop('user-button')
+  }
+
+  /**
+   * Rewrite a live end prompt to say how the recording actually ended — but
+   * only if nobody beat us to it. The platform's own click handler resolves
+   * the message (CFG-hosted) before stopping us over the control API, and its
+   * "ended by <name>" is the better text; a message with no components left
+   * is one that has already been resolved.
+   */
+  private async resolveEndPrompt(reason: StopReason): Promise<void> {
+    const prompt = this.endPrompt
+    if (!prompt) return
+    this.endPrompt = null
+    const channel = await this.params.client.channels.fetch(prompt.channelId)
+    if (!channel || !channel.isTextBased() || !('messages' in channel)) return
+    const msg = await channel.messages.fetch(prompt.messageId).catch(() => null)
+    if (!msg || !msg.editable) return
+    if (msg.components.length === 0) return
+    await msg.edit({ content: END_RESOLVED_TEXT[reason], components: [] })
+  }
+
+  private async editEndPrompt(content: string, components: ActionRowBuilder<ButtonBuilder>[]): Promise<void> {
+    const prompt = this.endPrompt
+    if (!prompt) return
+    await this.editMessage(prompt.channelId, prompt.messageId, content, components)
+  }
+
+  private async editMessage(
+    channelId: string,
+    messageId: string,
+    content: string,
+    components: ActionRowBuilder<ButtonBuilder>[],
+  ): Promise<void> {
+    try {
+      const channel = await this.params.client.channels.fetch(channelId)
+      if (!channel || !channel.isTextBased() || !('messages' in channel)) return
+      const msg = await channel.messages.fetch(messageId).catch(() => null)
+      if (!msg || !msg.editable) return
+      await msg.edit({ content, components })
+    } catch (err) {
+      this.logger.warn({ err, recordingId: this.recordingId, messageId }, 'end prompt edit failed (best-effort)')
+    }
+  }
+
+  private after(ms: number, fn: () => void): NodeJS.Timeout {
+    const t = setTimeout(fn, ms)
+    t.unref()
+    return t
+  }
+
+  private clearTimer(
+    name: 'emptyPromptTimer' | 'emptyEndTimer' | 'scheduledEndTimer' | 'promptTimeoutTimer',
+  ): void {
+    const t = this[name]
+    if (t) clearTimeout(t)
+    this[name] = null
+  }
+
+  private clearLifecycleTimers(): void {
+    this.clearTimer('emptyPromptTimer')
+    this.clearTimer('emptyEndTimer')
+    this.clearTimer('scheduledEndTimer')
+    this.clearTimer('promptTimeoutTimer')
+    this.clearRecheck()
+  }
+
+  private detachEndPrompt(): void {
+    if (!this.endPromptHandler) return
+    this.params.client.off('interactionCreate', this.endPromptHandler)
+    this.endPromptHandler = null
+  }
+
+  private async reportEnded(reason: StopReason): Promise<void> {
+    if (!this.params.cfg) return
+    await this.params.core.postRecordingEnded(reason).catch((err: unknown) => {
+      this.logger.warn({ err, recordingId: this.recordingId, reason }, 'recording-ended report failed')
+    })
+  }
+
+  /** Humans in the recorded channel per a REST read — the seed for the empty clock. */
+  private async humanVoiceMemberIds(client: Client): Promise<string[]> {
+    try {
+      const channel = await client.channels.fetch(this.voiceChannelId)
+      if (channel && channel.isVoiceBased()) {
+        return humanMemberIds(channel.members).filter((id) => id !== client.user?.id)
+      }
+    } catch {
+      /* fall through */
+    }
+    return []
   }
 
   /**
@@ -1005,6 +1452,12 @@ export class SessionController {
     /** Who has decided what, so an operator can act on a visible id. */
     consent: { consented: string[]; pending: string[]; declined: string[] }
     paused: boolean
+    /** Recording lifecycle — for the dashboard / ops, not for control. */
+    scheduledEndAt: string | null
+    discordEventId: string | null
+    humansPresent: number | null
+    endPromptPosted: boolean
+    stopReason: StopReason | null
   } {
     return {
       recordingId: this.recordingId,
@@ -1021,6 +1474,11 @@ export class SessionController {
         declined: [...this.consent.declinedIds()],
       },
       paused: this.status === 'paused',
+      scheduledEndAt: this.params.scheduledEndAt?.toISOString() ?? null,
+      discordEventId: this.params.discordEventId ?? null,
+      humansPresent: this.humansPresent,
+      endPromptPosted: this.endPrompt != null,
+      stopReason: this.stopReason,
     }
   }
 
