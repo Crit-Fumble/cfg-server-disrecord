@@ -107,7 +107,7 @@ const HOSTED: CfgHostedConfig = {
 }
 
 /** Short clocks so the suite runs in fake-timer milliseconds. */
-const TIMINGS = { emptyPromptMs: 5_000, emptyEndMs: 10_000, promptTimeoutMs: 3_000 }
+const TIMINGS = { emptyPromptMs: 5_000, emptyEndMs: 10_000, promptTimeoutMs: 3_000, promptRecheckMs: 2_000 }
 
 type Listener = (...args: unknown[]) => void
 
@@ -136,6 +136,8 @@ function fakeClient(voiceMemberIds: string[]) {
   for (const id of voiceMemberIds) members.set(id, { user: { bot: false } })
   members.set('bot-self', { user: { bot: true } })
   const voice = { isVoiceBased: () => true, name: 'Table 1', members }
+  /** Mutate to simulate people leaving/arriving as seen over REST. */
+  const voiceMembers = members
   const client = {
     on: jest.fn((evt: string, fn: Listener) => {
       listeners.set(evt, [...(listeners.get(evt) ?? []), fn])
@@ -149,7 +151,7 @@ function fakeClient(voiceMemberIds: string[]) {
       fetch: jest.fn(async (id: string) => (id === 'vc-1' ? voice : id === 'thread-123' ? thread : null)),
     },
   }
-  return { client: client as never, listeners, thread, promptMessage }
+  return { client: client as never, listeners, thread, promptMessage, voiceMembers }
 }
 
 function makeCore() {
@@ -319,6 +321,45 @@ describe('scheduled end', () => {
     expect(edit.components).toHaveLength(1)
   })
 
+  it('after an unanswered prompt with people present, it looks again on a cadence and ends at the first empty look (owner: check every 5 min)', async () => {
+    const scheduledEndAt = new Date(Date.now() + 60_000)
+    const { controller, fake, core, stopped } = await started(['u1'], { scheduledEndAt })
+    await jest.advanceTimersByTimeAsync(60_000 + TIMINGS.promptTimeoutMs)
+    await settle()
+    expect(controller.describe().status).toBe('recording')
+
+    // Two looks with someone still there: nothing ends, the button stays.
+    await jest.advanceTimersByTimeAsync(TIMINGS.promptRecheckMs * 2)
+    await settle()
+    expect(controller.describe().status).toBe('recording')
+    expect(controller.describe().endPromptPosted).toBe(true)
+
+    // They leave without a gateway delta reaching us — the REST look sees it.
+    fake.voiceMembers.delete('u1')
+    await jest.advanceTimersByTimeAsync(TIMINGS.promptRecheckMs)
+    await expect(stopped).resolves.toBe('scheduled-end')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('scheduled-end')
+  })
+
+  it('the button keeps working after the prompt timeout — there is no click deadline', async () => {
+    const scheduledEndAt = new Date(Date.now() + 60_000)
+    const { controller, fake, core, stopped } = await started(['u1'], { scheduledEndAt })
+    await jest.advanceTimersByTimeAsync(60_000 + TIMINGS.promptTimeoutMs + TIMINGS.promptRecheckMs * 3)
+    await settle()
+    expect(controller.describe().status).toBe('recording')
+    const interaction = {
+      isButton: () => true,
+      customId: 'end_recording:inst-1',
+      user: { id: 'u1', displayName: 'Alice', username: 'alice' },
+      member: { displayName: 'Alice' },
+      update: jest.fn(async () => undefined),
+      reply: jest.fn(async () => undefined),
+    }
+    for (const fn of fake.listeners.get('interactionCreate') ?? []) fn(interaction)
+    await expect(stopped).resolves.toBe('user-button')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('user-button')
+  })
+
   it('unanswered with the channel empty by then, it ends with scheduled-end', async () => {
     const scheduledEndAt = new Date(Date.now() + 60_000)
     const { controller, core, stopped } = await started(['u1'], { scheduledEndAt })
@@ -344,6 +385,12 @@ describe('the platform relay + the button', () => {
     await controller.promptEnd('event-ended')
     await controller.promptEnd('scheduled-end')
     expect(promptSends(fake.thread)).toEqual(['The Discord event has ended. Session over?'])
+  })
+
+  it('addresses the prompt to the host/GM when the invoker is known', async () => {
+    const { controller, fake } = await started(['u1'], { invokerUserId: 'host-1' })
+    await controller.promptEnd('event-ended')
+    expect(promptSends(fake.thread)).toEqual(['<@host-1> The Discord event has ended. Session over?'])
   })
 
   it('a gateway click on End recording acks by rewriting the prompt and ends with user-button', async () => {

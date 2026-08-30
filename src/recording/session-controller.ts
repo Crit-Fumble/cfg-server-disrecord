@@ -24,11 +24,16 @@
  *   - **Scheduled end.** `scheduledEndAt` (from the platform's calendar) →
  *     the same prompt; unanswered for {@link END_PROMPT_TIMEOUT_MS} it ends
  *     ONLY if the channel is empty by then. A full table that ignores the
- *     prompt keeps recording — the empty-channel clock is what ends it.
+ *     prompt keeps recording, and the worker looks again every
+ *     {@link END_PROMPT_RECHECK_MS} — the first look that finds the channel
+ *     empty ends it (owner decision 2026-08-29). The button never expires.
  *   - **Bot disconnected.** A human removing the bot from voice is an
  *     instruction; the recording ends the normal way.
  *
- * The prompt is one button, `End recording`. Self-host: the click reaches
+ * The prompt is addressed to the host/GM (the invoker) and carries one
+ * button, `End recording`. It ends the RECORDING; ending the game session or
+ * the Discord event stays a human act on the platform side (owner decision
+ * 2026-08-29 — no auto-ending of Discord events at this phase). Self-host: the click reaches
  * this process over the gateway. CFG-hosted: Discord delivers it to the
  * platform's interactions endpoint instead, which stops the recording over
  * the control API — so the button works in both modes without the worker
@@ -94,6 +99,13 @@ const EMPTY_END_AFTER_MS = 10 * 60_000
  * channel is empty at that point. See the class doc.
  */
 const END_PROMPT_TIMEOUT_MS = 10 * 60_000
+/**
+ * After an unanswered prompt found people still present: how often to look
+ * again. Each look re-reads the channel over REST rather than trusting the
+ * last gateway delta, so a missed voice-state event cannot keep an empty
+ * channel recording.
+ */
+const END_PROMPT_RECHECK_MS = 5 * 60_000
 /** `setTimeout` overflows past this and fires immediately — clamp long waits. */
 const MAX_TIMER_MS = 2 ** 31 - 1
 
@@ -108,6 +120,7 @@ export interface LifecycleTimings {
   emptyPromptMs?: number
   emptyEndMs?: number
   promptTimeoutMs?: number
+  promptRecheckMs?: number
 }
 
 const END_PROMPT_TEXT: Record<EndPromptTrigger, string> = {
@@ -347,6 +360,8 @@ export class SessionController {
   private emptyEndTimer: NodeJS.Timeout | null = null
   private scheduledEndTimer: NodeJS.Timeout | null = null
   private promptTimeoutTimer: NodeJS.Timeout | null = null
+  /** Armed once an unanswered prompt found people present; looks again on a cadence. */
+  private promptRecheckTimer: NodeJS.Timeout | null = null
   /** The live end prompt, if one is on screen. Cleared once it is resolved. */
   private endPrompt: { messageId: string; channelId: string; trigger: EndPromptTrigger } | null = null
   /** Gateway listener for the end button (self-host delivery). Detached on stop. */
@@ -1114,7 +1129,11 @@ export class SessionController {
         this.logger.warn({ recordingId: this.recordingId, channelId, trigger }, 'end prompt: channel not sendable')
         return
       }
-      const msg = await channel.send({ content: END_PROMPT_TEXT[trigger], components: this.buildEndPromptRow() })
+      // Addressed to the host/GM when we know them (the invoker, or the
+      // auto-start host) — the prompt is theirs to answer. Everyone in the
+      // thread still sees it.
+      const mention = this.params.invokerUserId ? `<@${this.params.invokerUserId}> ` : ''
+      const msg = await channel.send({ content: `${mention}${END_PROMPT_TEXT[trigger]}`, components: this.buildEndPromptRow() })
       this.endPrompt = { messageId: msg.id, channelId, trigger }
       this.logger.info({ recordingId: this.recordingId, trigger, messageId: msg.id }, 'end prompt posted')
     } catch (err) {
@@ -1130,7 +1149,9 @@ export class SessionController {
   /**
    * The prompt went unanswered. End only if nobody is left — a table that is
    * still talking past its scheduled end has answered by staying. Otherwise
-   * say so and leave the button up; the empty-channel clock ends it later.
+   * say so, leave the button up (it never expires), and look again every
+   * {@link END_PROMPT_RECHECK_MS}; the first look that finds the channel
+   * empty ends the recording.
    */
   private async onEndPromptTimeout(trigger: EndPromptTrigger): Promise<void> {
     this.promptTimeoutTimer = null
@@ -1142,12 +1163,44 @@ export class SessionController {
     }
     this.logger.info(
       { recordingId: this.recordingId, trigger, humansPresent: this.humansPresent },
-      'end prompt unanswered but people are still here — recording continues',
+      'end prompt unanswered but people are still here — recording continues, looking again on a cadence',
     )
     await this.editEndPrompt(
       'Still recording — press **End recording** when you are done.',
       this.buildEndPromptRow(),
     )
+    const recheckMs = this.params.timings?.promptRecheckMs ?? END_PROMPT_RECHECK_MS
+    this.clearRecheck()
+    const timer = setInterval(() => void this.recheckAfterPrompt(trigger), recheckMs)
+    timer.unref()
+    this.promptRecheckTimer = timer
+  }
+
+  /**
+   * One look after an unanswered prompt. Reads the channel over REST (not the
+   * cached delta) so a missed gateway event cannot keep an empty channel
+   * recording, feeds the result through the normal occupancy path, and ends
+   * the recording if nobody is there.
+   */
+  private async recheckAfterPrompt(trigger: EndPromptTrigger): Promise<void> {
+    if (this.status !== 'recording' && this.status !== 'paused') {
+      this.clearRecheck()
+      return
+    }
+    const humans = await this.humanVoiceMemberIds(this.params.client)
+    this.handleOccupancy(humans)
+    if (humans.length > 0) {
+      this.logger.info({ recordingId: this.recordingId, trigger, humans: humans.length }, 'post-prompt look: people still here')
+      return
+    }
+    this.logger.info({ recordingId: this.recordingId, trigger }, 'post-prompt look found the channel empty — ending')
+    this.clearRecheck()
+    void this.stop(trigger)
+  }
+
+  private clearRecheck(): void {
+    if (this.promptRecheckTimer) clearInterval(this.promptRecheckTimer)
+    this.promptRecheckTimer = null
   }
 
   /** Occupancy report from VoiceCapture (and the REST seed at start). */
@@ -1301,6 +1354,7 @@ export class SessionController {
     this.clearTimer('emptyEndTimer')
     this.clearTimer('scheduledEndTimer')
     this.clearTimer('promptTimeoutTimer')
+    this.clearRecheck()
   }
 
   private detachEndPrompt(): void {

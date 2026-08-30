@@ -211,7 +211,9 @@ over — nobody has to remember to stop it:
   recording. Anyone rejoining cancels both.
 - **Scheduled end.** When `scheduledEndAt` passes, the same prompt appears.
   If nobody clicks within ten minutes it ends **only if the channel is empty
-  by then** — a table still talking past its scheduled end keeps recording.
+  by then** — a table still talking past its scheduled end keeps recording,
+  and the worker looks again every five minutes; the first look that finds
+  the channel empty ends it. The button never expires.
 - **Bot disconnected.** Removing the bot from voice ends the recording the
   normal way (mix, VTT, thread post).
 - **The button.** Clicking `End recording` ends it immediately and rewrites
