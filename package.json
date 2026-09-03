@@ -27,8 +27,8 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1116.0",
-    "@aws-sdk/lib-storage": "^3.1116.0",
+    "@aws-sdk/client-s3": "^3.1121.0",
+    "@aws-sdk/lib-storage": "^3.1121.0",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.27.0",
@@ -43,13 +43,13 @@
     "@swc/core": "^1.16.1",
     "@swc/jest": "^0.2.37",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.4.0",
     "@types/ws": "^8.5.13",
     "husky": "^9.1.7",
-    "jest": "^30.4.2",
+    "jest": "^30.5.0",
     "rimraf": "^6.1.2",
     "tsc-alias": "^1.9.2",
-    "tsx": "^4.23.12",
+    "tsx": "^4.23.13",
     "typescript": "^6.0.3"
   },
   "engines": {
