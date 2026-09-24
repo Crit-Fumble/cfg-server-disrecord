@@ -29,7 +29,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g. v0.1.2). Used only for naming when run manually.'
+        description: 'Tag to build (e.g. v0.1.2). Checked out and built, and used as the image tag.'
         required: true
 
 permissions:
@@ -126,6 +126,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # A dispatch runs on a branch; without this it builds the branch head, not the tag (dt#670).
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
