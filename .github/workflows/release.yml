@@ -49,6 +49,8 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # Same ref the build job checks out, so the CI gate below asks about the commit being built (dt#670).
+          ref: ${{ inputs.tag || github.ref }}
 
       # Kills the drift that let package.json sit at 0.2.8 while tags reached
       # v0.2.21 — at which point `npm version patch` proposes v0.2.9, a tag that
@@ -94,13 +96,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Not $GITHUB_SHA: on a dispatch that is the branch head, not the tag being built (dt#670).
+          SHA=$(git rev-parse HEAD)
           DEADLINE=$(( $(date +%s) + 900 ))
           while :; do
-            RUNS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs" \
+            RUNS=$(gh api "repos/$GITHUB_REPOSITORY/commits/$SHA/check-runs" \
               --jq '[.check_runs[] | select(.name == "test")]')
 
             if [ "$(echo "$RUNS" | jq 'any(.[]; .conclusion == "success")')" = "true" ]; then
-              echo "CI test check is green for $GITHUB_SHA"
+              echo "CI test check is green for $SHA"
               exit 0
             fi
 
@@ -108,15 +112,15 @@ jobs:
             # fail now rather than burning the whole timeout.
             BAD=$(echo "$RUNS" | jq -r '[.[] | select(.conclusion != null and .conclusion != "success") | .conclusion] | join(", ")')
             if [ -n "$BAD" ]; then
-              echo "::error::CI 'test' for $GITHUB_SHA concluded: $BAD. Nothing untested reaches :latest."
+              echo "::error::CI 'test' for $SHA concluded: $BAD. Nothing untested reaches :latest."
               exit 1
             fi
 
             if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-              echo "::error::timed out after 15m waiting for CI 'test' on $GITHUB_SHA. Was the commit ever pushed to main or next?"
+              echo "::error::timed out after 15m waiting for CI 'test' on $SHA. Was the commit ever pushed to main or next?"
               exit 1
             fi
-            echo "waiting for CI 'test' on ${GITHUB_SHA:0:8} (queued or not yet reported)…"
+            echo "waiting for CI 'test' on ${SHA:0:8} (queued or not yet reported)…"
             sleep 20
           done
 
@@ -144,6 +148,8 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
+          # sha-<short> and the revision label come from the checked-out commit, not github.sha (a dispatch's branch head) — dt#670.
+          context: git
           images: ghcr.io/crit-fumble/cfg-server-disrecord
           tags: |
             type=ref,event=tag
