@@ -5,6 +5,8 @@
  *   - self-host: never touches fetch
  *   - hosted: POST /api/v1/recording/ended { installationId, reason } with the
  *     session bearer, time-bounded
+ *   - the recording's length rides along as `durationSeconds` only when it is
+ *     a real one (#74) — core never overwrites, so a bad value would stick
  *   - a 404 (core without the route yet) is tolerated: ship-ahead safety
  *   - a 5xx or a thrown fetch never propagates — the stop pipeline that calls
  *     this must complete whatever core does
@@ -46,6 +48,24 @@ describe('CoreServerClient.postRecordingEnded', () => {
     expect(JSON.parse(init.body as string)).toEqual({ installationId: 'inst-1', reason: 'bot-disconnected' })
     // Time-bounded: the stop pipeline must never hang on core.
     expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it.each([
+    [5_400_000, 5_400],
+    [1_234, 1.234],
+  ])('carries a %d ms recording as durationSeconds %d', async (durationMs, durationSeconds) => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 202 }))
+    await new CoreServerClient(HOSTED, logger).postRecordingEnded('user-button', durationMs)
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ installationId: 'inst-1', reason: 'user-button', durationSeconds })
+  })
+
+  // 0 included: probeDuration returns 0 when ffprobe fails, and core keeps the first value it gets.
+  it.each([undefined, NaN, Infinity, -1, 0])('leaves durationSeconds off for %p — no length is better than a wrong one', async (durationMs) => {
+    fetchSpy.mockResolvedValue(new Response(null, { status: 202 }))
+    await new CoreServerClient(HOSTED, logger).postRecordingEnded('channel-empty', durationMs)
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ installationId: 'inst-1', reason: 'channel-empty' })
   })
 
   it.each([404, 500])('a %d never throws', async (status) => {

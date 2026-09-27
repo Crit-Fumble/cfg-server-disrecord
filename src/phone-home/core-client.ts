@@ -19,7 +19,8 @@
  *        transcription (the platform key never enters the container).
  *
  *   POST /api/v1/recording/ended
- *        Every stop, whoever started it, with the reason. This is the report
+ *        Every stop, whoever started it, with the reason (and the recording's
+ *        length when post-processing produced one). This is the report
  *        that closes the loop for stops the platform did not issue (a human
  *        disconnecting the bot, an empty channel, the end-prompt button).
  *
@@ -283,15 +284,29 @@ export class CoreServerClient {
    * {@link ENDED_REPORT_TIMEOUT_MS}). A core that predates the route answers
    * 404, which is logged and otherwise ignored — the worker must be safe to
    * ship ahead of the platform half.
+   *
+   * `durationMs` is the finished recording's length from post-processing
+   * (#74); core stores it as `RecordingSession.durationSeconds`, which nothing
+   * else writes. It is sent only when it is a real length — a stop that mixed
+   * nothing, or failed to, leaves the field off and core keeps the column null.
+   * Zero is not a length: `probeDuration` returns 0 when ffprobe fails, and core
+   * keeps the first value it is sent, so a 0 would stick forever.
    */
-  async postRecordingEnded(reason: RecordingEndReason): Promise<void> {
+  async postRecordingEnded(reason: RecordingEndReason, durationMs?: number): Promise<void> {
     if (!this.cfg) return
     const url = this.url('/api/v1/recording/ended')
+    const body: { installationId: string; reason: RecordingEndReason; durationSeconds?: number } = {
+      installationId: this.cfg.installationId,
+      reason,
+    }
+    if (durationMs !== undefined && Number.isFinite(durationMs) && durationMs > 0) {
+      body.durationSeconds = durationMs / 1000
+    }
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: this.headers(),
-        body: JSON.stringify({ installationId: this.cfg.installationId, reason }),
+        body: JSON.stringify(body),
         signal: AbortSignal.timeout(ENDED_REPORT_TIMEOUT_MS),
       })
       if (res.status === 404) {

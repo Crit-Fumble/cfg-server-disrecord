@@ -14,7 +14,8 @@
  *     `user-button`.
  *   - EVERY STOP reports home with its reason (hosted) — never in self-host —
  *     and fires `onStopped` exactly once, after the pipeline. The FIRST
- *     reason wins when stops overlap.
+ *     reason wins when stops overlap. The report carries the mixed
+ *     recording's length when there is one, and none otherwise.
  *
  * Collaborators are mocked at the module boundary; VoiceCapture's constructor
  * params are captured so the test can drive the occupancy + disconnect
@@ -89,7 +90,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { testSettingsStore } from '../../_lib/settings.js'
 import { SessionController, type SessionControllerParams, type StopReason } from '../../../src/recording/session-controller.js'
+import { processRecording } from '../../../src/recording/post-process.js'
 import type { CfgHostedConfig } from '../../../src/config.js'
+
+const processRecordingMock = processRecording as unknown as jest.Mock
 
 const silentLogger = {
   info: jest.fn(),
@@ -162,7 +166,7 @@ function makeCore() {
     postRecordingThread: jest.fn(async () => undefined),
     postParticipants: jest.fn(async () => undefined),
     postChunk: jest.fn(async () => undefined),
-    postRecordingEnded: jest.fn(async () => undefined),
+    postRecordingEnded: jest.fn(async (_reason: StopReason, _durationMs?: number) => undefined),
   }
 }
 type FakeCore = ReturnType<typeof makeCore>
@@ -263,7 +267,7 @@ describe('empty channel', () => {
     expect(controller.describe().status).toBe('stopped')
     expect(controller.describe().stopReason).toBe('channel-empty')
     expect(core.postRecordingEnded).toHaveBeenCalledTimes(1)
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('channel-empty')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('channel-empty', undefined)
     expect(onStopped).toHaveBeenCalledTimes(1)
     expect(onStopped).toHaveBeenCalledWith('channel-empty')
     // The prompt says what happened, and its button is gone.
@@ -338,7 +342,7 @@ describe('scheduled end', () => {
     fake.voiceMembers.delete('u1')
     await jest.advanceTimersByTimeAsync(TIMINGS.promptRecheckMs)
     await expect(stopped).resolves.toBe('scheduled-end')
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('scheduled-end')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('scheduled-end', undefined)
   })
 
   it('the button keeps working after the prompt timeout — there is no click deadline', async () => {
@@ -357,7 +361,7 @@ describe('scheduled end', () => {
     }
     for (const fn of fake.listeners.get('interactionCreate') ?? []) fn(interaction)
     await expect(stopped).resolves.toBe('user-button')
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('user-button')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('user-button', undefined)
   })
 
   it('unanswered with the channel empty by then, it ends with scheduled-end', async () => {
@@ -368,7 +372,7 @@ describe('scheduled end', () => {
     await jest.advanceTimersByTimeAsync(TIMINGS.promptTimeoutMs)
     await expect(stopped).resolves.toBe('scheduled-end')
     expect(controller.describe().status).toBe('stopped')
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('scheduled-end')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('scheduled-end', undefined)
   })
 
   it('a scheduled end already in the past at start is ignored', async () => {
@@ -408,7 +412,7 @@ describe('the platform relay + the button', () => {
     await expect(stopped).resolves.toBe('user-button')
     expect(interaction.update).toHaveBeenCalledWith({ content: 'Recording ended by Alice.', components: [] })
     expect(controller.describe().status).toBe('stopped')
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('user-button')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('user-button', undefined)
     // Already resolved by the click — the stop pipeline must not rewrite it.
     expect(fake.promptMessage.edit).not.toHaveBeenCalled()
   })
@@ -446,7 +450,7 @@ describe('stop reasons and reporting', () => {
     voiceParams!.onExplicitDisconnect!('disconnected from voice by a user')
     await expect(stopped).resolves.toBe('bot-disconnected')
     expect(controller.describe().status).toBe('stopped')
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('bot-disconnected')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('bot-disconnected', undefined)
     expect(onStopped).toHaveBeenCalledWith('bot-disconnected')
   })
 
@@ -456,14 +460,39 @@ describe('stop reasons and reporting', () => {
     const second = controller.stop('control-stop')
     await Promise.all([first, second])
     expect(core.postRecordingEnded).toHaveBeenCalledTimes(1)
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('channel-empty')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('channel-empty', undefined)
     expect(onStopped).toHaveBeenCalledTimes(1)
   })
 
   it('a platform-issued stop reports control-stop', async () => {
     const { core, controller } = await started(['u1'])
     await controller.stop()
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('control-stop')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('control-stop', undefined)
+  })
+
+  it('reports the length of the mixed recording with the end (#74)', async () => {
+    processRecordingMock.mockResolvedValueOnce({
+      mp3Path: '/tmp/rec/mixed.mp3',
+      sizeBytes: 1_024,
+      durationMs: 5_400_000,
+      captions: [],
+      mp3Location: 'memory://inst-1.mp3',
+    })
+    const { core, controller } = await started(['u1'])
+    await controller.stop('user-button')
+    expect(core.postRecordingEnded).toHaveBeenCalledTimes(1)
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('user-button', 5_400_000)
+  })
+
+  it('a failed post-process still reports the end, with no length', async () => {
+    processRecordingMock.mockRejectedValueOnce(new Error('ffmpeg exited 1'))
+    const { core, controller, onStopped } = await started(['u1'])
+    await controller.stop('control-stop')
+    expect(controller.describe().status).toBe('failed')
+    expect(core.postRecordingEnded).toHaveBeenCalledTimes(1)
+    expect(core.postRecordingEnded.mock.calls[0]?.[0]).toBe('control-stop')
+    expect(core.postRecordingEnded.mock.calls[0]?.[1]).toBeUndefined()
+    expect(onStopped).toHaveBeenCalledWith('control-stop')
   })
 
   it('self-host never reports home, but still releases via onStopped', async () => {
@@ -480,7 +509,7 @@ describe('stop reasons and reporting', () => {
     await jest.advanceTimersByTimeAsync(TIMINGS.emptyEndMs * 2)
     await settle()
     expect(core.postRecordingEnded).toHaveBeenCalledTimes(1)
-    expect(core.postRecordingEnded).toHaveBeenCalledWith('control-stop')
+    expect(core.postRecordingEnded).toHaveBeenCalledWith('control-stop', undefined)
   })
 
   it('surfaces the lifecycle in describe() for ops', async () => {
