@@ -27,8 +27,8 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1136.0",
-    "@aws-sdk/lib-storage": "^3.1136.0",
+    "@aws-sdk/client-s3": "^3.1141.0",
+    "@aws-sdk/lib-storage": "^3.1141.0",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.27.0",
@@ -37,13 +37,13 @@
     "libsodium-wrappers": "^0.8.4",
     "pino": "^10.1.0",
     "tweetnacl": "^1.0.3",
-    "ws": "^8.21.3"
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@swc/core": "^1.16.2",
     "@swc/jest": "^0.2.37",
     "@types/jest": "^30.0.0",
-    "@types/node": "^26.6.2",
+    "@types/node": "^26.6.3",
     "@types/ws": "^8.5.13",
     "husky": "^9.1.7",
     "jest": "^30.5.2",
