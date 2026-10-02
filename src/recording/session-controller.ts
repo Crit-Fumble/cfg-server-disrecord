@@ -1027,6 +1027,9 @@ export class SessionController {
     )
     this.logger.info({ recordingId: rid }, '[runStop] 4/9 billing timer stopped')
 
+    // The finished recording's length, reported home with the end (#74).
+    // Stays undefined when nothing was mixed or post-processing threw.
+    let durationMs: number | undefined
     try {
       const result = await processRecording(
         rid,
@@ -1054,6 +1057,7 @@ export class SessionController {
         },
         '[runStop] 5/9 processRecording returned',
       )
+      durationMs = result?.durationMs
       if (result) {
         await this.deliver(result)
         this.logger.info({ recordingId: rid }, '[runStop] 6/9 delivery complete')
@@ -1097,7 +1101,7 @@ export class SessionController {
       // Close the loop with the platform — the report that was missing when
       // a kicked bot ended cleanly and core kept the session "active" for
       // days. Time-bounded + best-effort inside the client; never throws.
-      await this.reportEnded(reason)
+      await this.reportEnded(reason, durationMs)
       try {
         this.params.onStopped?.(reason)
       } catch (err) {
@@ -1363,9 +1367,9 @@ export class SessionController {
     this.endPromptHandler = null
   }
 
-  private async reportEnded(reason: StopReason): Promise<void> {
+  private async reportEnded(reason: StopReason, durationMs: number | undefined): Promise<void> {
     if (!this.params.cfg) return
-    await this.params.core.postRecordingEnded(reason).catch((err: unknown) => {
+    await this.params.core.postRecordingEnded(reason, durationMs).catch((err: unknown) => {
       this.logger.warn({ err, recordingId: this.recordingId, reason }, 'recording-ended report failed')
     })
   }
