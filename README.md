@@ -7,7 +7,8 @@ hands DisRecord its token so DisRecord can join voice on the bot's behalf.
 
 The container has **no slash-command surface**. It is driven entirely by an
 HTTP control API. If you want slash commands, build your own bot that drives
-this container — **ReSesh** (in `cfg-core-server` / `cfg-core-browser`) is the
+this container — **ReSesh** (web app and Discord Activity in `cfg-app-resesh`;
+slash-command dispatch and container lifecycle in `cfg-core-server`) is the
 reference implementation.
 
 > ℹ️ **Those CFG repos are private.** They are named for orientation throughout this README,
@@ -170,16 +171,18 @@ and transcript browsing belong to core-server, not here. It is **not** served
 when CFG-hosted — core-server owns that surface, and the container isn't
 reachable from a browser there anyway.
 
-It inherits the control server's `127.0.0.1` bind. Since "no `CONTROL_TOKEN` ⇒
-every request allowed" is only safe on loopback, the container **refuses to
-boot** if the dashboard would be served on a wider bind without a token.
+Since "no `CONTROL_TOKEN` ⇒ every request allowed" is only safe on loopback,
+the container **refuses to boot** if the dashboard would be served on a wider
+bind without a token.
 
 ### HTTP control API
 
-The container exposes a control API on `${CONTROL_PORT}`. Local-only it
-binds `127.0.0.1` and, when `CONTROL_TOKEN` is set, every `/v1/*` request
-must carry `Authorization: Bearer <token>`. CFG-hosted it binds `0.0.0.0`
-and verifies the per-session JWT instead.
+The container exposes a control API on `${CONTROL_PORT}`. Local-only, the
+image binds `0.0.0.0` (a loopback bind inside a container is unreachable
+through `docker run -p`), so `CONTROL_TOKEN` is mandatory and every `/v1/*`
+request must carry `Authorization: Bearer <token>`; a bare-metal source run
+keeps the `127.0.0.1` default, where the token is optional. CFG-hosted it
+binds `0.0.0.0` and verifies the per-session JWT instead.
 
 ```
 POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription? } → { recordingId }
@@ -254,9 +257,10 @@ Settable per world or per channel: `keywords`, `keyterms`,
 Absent means *inherit*; an empty array or empty string means *explicitly none*,
 so a channel can switch off keywords its world sets.
 
-`keywords` and `keyterms` are applied to the next recording in that channel, and
-**the container's own settings win** over anything the platform supplies —
-self-host gets per-channel Deepgram boosts for the first time.
+`keywords` and `keyterms` are applied to the next recording in that channel.
+This document is their only source in both modes: CFG-hosted, the platform
+writes it (see the read-only note below) instead of sending boosts with the
+session.
 
 `threadNameTemplate` names the recording thread. Tokens are `{{voiceChannel}}`,
 `{{date}}` and `{{kind}}` (`Recording` or `Transcription`); anything else is
@@ -323,10 +327,3 @@ npm run build
 `npm rebuild @discordjs/opus`; unit tests mock it so they run without it.
 
 Pre-push hook runs the full test suite (cfg-* convention). No `--no-verify`.
-
-## Tracking
-
-cfg-core-dev-tools#117 (cfg-server-disrecord epic). The skill-server
-container holds the whole recording engine; cfg-core-server keeps only
-account/billing/consent data + container lifecycle and proxies the control
-API. CFG-hosted recording works via optional phone-home.

@@ -29,12 +29,6 @@ So **a worker release is: tag → wait for the image**. There is no deploy step
 and no host command; the next recording session starts on the new build. A
 session already running keeps its container until it ends.
 
-> ⚠️ **This section used to say the opposite** — that `createContainer` never
-> pulls, so a release needed a manual `docker pull` on the prod host. That was
-> true when it was written and stopped being true when `imagePull: 'always'`
-> landed. Verified against `client.ts:486-500` on 2026-08-08. If you are
-> holding a checklist with a "refresh the host" step on it, drop that step.
-
 ## Cutting a release
 
 **1. Bump the version in a PR into `next`.**
@@ -50,6 +44,23 @@ npm version --no-git-tag-version patch    # or minor / major
 
 `--no-git-tag-version` matters: plain `npm version` commits and tags for you,
 which is the trap above.
+
+Before promoting, run the live recording specs from `cfg-core-dev-tools`. Set
+`DISRECORD_DISCORD_TOKEN` and the `DISCORD_TEST_*` ids in its `.env.test`, run
+`npm run test:up`, then:
+
+```sh
+cd dev/e2e-tests
+node scripts/_disrecord-fixture-image.mjs --rebuild   # a stale image only warns
+E2E_DOCKER=true npx playwright test --project=api tests/resesh/
+```
+
+The specs build `cfg-server-disrecord:test` from dev-tools'
+`workspaces/cfg-server-disrecord` checkout only when that image is absent, which
+is why the rebuild comes first. These specs are the only automated check that a
+real recording runs and applies its settings file. They skip in cloud-e2e (no
+bot token), and prod acceptance never starts a recording, yet a published
+`:latest` reaches every user's next recording.
 
 **2. Promote `next` → `main`** by fast-forward. Never a merge button — squash,
 merge commit and rebase-merge all leave the branches permanently unrelated.
@@ -88,9 +99,7 @@ gh api /orgs/Crit-Fumble/packages/container/cfg-server-disrecord/versions \
 ```
 
 There is **no** step 5. Do not `docker pull` on the prod host — `imagePull:
-'always'` means the next recording pulls it, and the ⚠️ note above explains why
-that step was removed. If you are holding an older checklist, this is the step
-it told you to run; drop it.
+'always'` means the next recording pulls it.
 
 ## What the workflow refuses to publish
 
@@ -99,7 +108,7 @@ what production spawns, this workflow is a production gate, not just a build.
 
 | refuses when | why |
 |---|---|
-| tag ≠ `package.json` version | the drift that left package.json on 0.2.8 while tags reached v0.2.21, where `npm version patch` proposes an already-taken tag |
+| tag ≠ `package.json` version | a `package.json` behind the tags makes `npm version patch` propose an already-taken tag |
 | the tagged commit is not on `main` | `:latest` feeds production; only promoted code may claim it |
 | CI's `test` check is not green for that exact commit | CI runs on push to main/next and on PRs — **never on tags** — so a tag on an unbuilt commit would otherwise publish untested |
 
@@ -133,8 +142,8 @@ re-publishing, not reverting a config value:
    picks it up at the next spawn, no host command):
 
 ```sh
-docker pull   ghcr.io/crit-fumble/cfg-server-disrecord:v0.2.21
-docker tag    ghcr.io/crit-fumble/cfg-server-disrecord:v0.2.21 \
+docker pull   ghcr.io/crit-fumble/cfg-server-disrecord:<good-tag>
+docker tag    ghcr.io/crit-fumble/cfg-server-disrecord:<good-tag> \
               ghcr.io/crit-fumble/cfg-server-disrecord:latest
 docker push   ghcr.io/crit-fumble/cfg-server-disrecord:latest
 ```
