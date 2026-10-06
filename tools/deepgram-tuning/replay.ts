@@ -3,9 +3,7 @@
  *
  * Owner request 2026-07-22: a way to fine-tune Deepgram settings against real
  * audio locally, instead of discovering the effect of a change during a live
- * game. Prompted by #10 (accuracy regression) and the `utteranceEndMs
- * 1500 -> 3000` change in `460980e`, which was reasoned from code rather than
- * measured.
+ * game (#10).
  *
  * Two things make this measure the right knob:
  *
@@ -23,7 +21,7 @@
  *      the same class, the same `createDeepgramStream`, the same
  *      forced-finalize timer and turn-taking logic production runs. Results
  *      transfer without a translation step. The only concession is the
- *      `tuning` override the session now accepts.
+ *      `tuning` override the session accepts.
  *
  * Audio is fed at approximately real time. Endpointing is silence-sensitive,
  * so blasting the file through compresses the gaps and changes the behaviour
@@ -63,9 +61,8 @@ import { extractVttText, normalizeWords, wordErrorRate } from './wer.js'
 const logger = rootLogger.child({ module: 'deepgram-tuning' })
 
 /**
- * Default sweep. Spans the settings this project has actually shipped:
- * 1500/1000 is the pre-#10 tuning that starved the model of context,
- * 3000/2000 is current, 4000/2000 is the original cfg-core-server #359 value.
+ * Default sweep. 3000/2000 is current; 1500/1000 is the short end that starves
+ * the model of context (#10); 4000/2000 is the long end.
  * Override with `--matrix '[{"utteranceEndMs":2500,"endpointing":1800}]'`.
  */
 const DEFAULT_MATRIX: Array<Pick<DeepgramStreamTuning, 'utteranceEndMs' | 'endpointing'>> = [

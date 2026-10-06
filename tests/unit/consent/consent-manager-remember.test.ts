@@ -2,11 +2,10 @@
  * Which consent clicks are worth REMEMBERING.
  *
  * The prompt offers "🔁 Yes, and remember — voice is captured for this session
- * AND future sessions in this channel." The container used to collapse
- * `consent_remember` into a plain `consent` at the interaction handler, on the
- * grounds that core-server's webhook did the persistent write. True
- * CFG-hosted; false self-host, which has no webhook — so the button silently
- * did nothing there.
+ * AND future sessions in this channel." Collapsing `consent_remember` into a
+ * plain `consent` at the interaction handler — on the grounds that core-server's
+ * webhook does the persistent write — is right CFG-hosted but wrong self-host,
+ * which has no webhook: the button would silently do nothing there.
  *
  * The rule below is copied from core's `handleConsentButton` rather than
  * re-derived. A self-hoster and a CFG user reading the same label must get the
@@ -135,9 +134,9 @@ describe('ConsentManager — persistent decisions mirror core handleConsentButto
   it('the CONTROL-API path persists by the same rule as the buttons', () => {
     const h = makeHarness()
 
-    // The bug this pins: `pushConsent` used to poke applyConsent/applyDecline
-    // directly, so every decision made through the dashboard or the control
-    // API was this-session-only — FOREVER, and including declines, which are
+    // What this pins: a `pushConsent` that pokes applyConsent/applyDecline
+    // directly makes every decision made through the dashboard or the control
+    // API this-session-only — FOREVER, and including declines, which are
     // supposed to persist unconditionally. Same silent-nothing shape as the
     // "Yes, and remember" button doing nothing, one path over.
     h.mgr.applyExternalDecision('api-remember', true, true)

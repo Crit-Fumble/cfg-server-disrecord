@@ -2,7 +2,6 @@
  * VTT Caption Generator — converts caption entries into WebVTT with speaker
  * labels.
  *
- * Ported verbatim from cfg-core-server's `services/recording/vtt-generator.ts`.
  * Non-consenting speakers show as [redacted] in captions.
  */
 

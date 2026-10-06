@@ -55,7 +55,7 @@ jest.mock('../../../src/discord/speaker-webhook.js', () => ({
 
 jest.mock('../../../src/discord/thread-poster.js', () => ({
   createRecordingThread: jest.fn(async () => 'thread-123'),
-  // Honest to the cs#352 signature: postRecording resolves a boolean now.
+  // Honest to the cs#352 signature: postRecording resolves a boolean.
   // `undefined` here would silently exercise deliver()'s no-report path —
   // the deliver-time report-back is covered in session-controller-deliver.test.ts.
   postRecording: jest.fn(async () => true),

@@ -1,9 +1,8 @@
 /**
  * Audio Splitter — pause detection, split-point planning, and MP3 chunking.
  *
- * Ported verbatim from cfg-core-server's `services/recording/audio-splitter.ts`,
- * with the logger swapped for this repo's pino instance. Used by
- * thread-poster.ts to split long recordings into Discord-uploadable parts.
+ * Used by thread-poster.ts to split long recordings into Discord-uploadable
+ * parts.
  */
 
 import { spawn } from 'node:child_process'

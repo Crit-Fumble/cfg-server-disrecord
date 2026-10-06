@@ -7,9 +7,8 @@
  *   2. RecordingSession  — decodes opus → PCM, streams to Deepgram for live
  *                          transcription (no-op when transcription disabled).
  *
- * Ported from cfg-core-server's `services/disrecord/voice-manager.ts`,
- * minus the opus-bus publish (there is no SSE fan-out in standalone mode —
- * both consumers live in-process).
+ * No opus-bus publish: there is no SSE fan-out in standalone mode — both
+ * consumers live in-process.
  *
  * One VoiceCapture instance per active recording.
  */
@@ -143,10 +142,9 @@ export class VoiceCapture {
   /**
    * voiceStateUpdate listener — fires the consent prompt the moment a
    * non-bot user JOINS the voice channel we're recording, rather than
-   * waiting until they first speak. The previous "prompt on first
-   * speech" path is still there for safety (it no-ops if we've already
-   * marked the user seen), but the prompt now lands in their notifications
-   * the instant they join.
+   * waiting until they first speak, so the prompt lands in their
+   * notifications the instant they join. The "prompt on first speech" path
+   * stays as a fallback (it no-ops if we've already marked the user seen).
    *
    * Retained as a field so {@link leave} can detach it cleanly when the
    * session ends — leaks would accumulate across self-host sessions.

@@ -149,7 +149,7 @@ describe('settings routes — reads and writes', () => {
     const del = await app.inject({ method: 'DELETE', url: `/v1/worlds/${GUILD}/scenes/${CHANNEL}` })
     expect(del.statusCode).toBe(204)
 
-    // Removing from a resource must not create it — this used to flip the
+    // Removing from a resource must not create it — that would flip the
     // world's GET from 404 to 200 by virtue of a delete.
     expect((await app.inject({ method: 'GET', url: `/v1/worlds/${GUILD}` })).statusCode).toBe(404)
     expect((await app.inject({ method: 'GET', url: '/v1/worlds' })).json()).toEqual({ worlds: {} })

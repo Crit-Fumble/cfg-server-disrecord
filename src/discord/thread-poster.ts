@@ -3,9 +3,8 @@
  * finalized mp3 + VTT into it, chunking when the mp3 is over Discord's
  * upload cap.
  *
- * Ported from cfg-core-server's thread-creation block in `recording-handler.ts`
- * + the chunked-upload flow in `discord-delivery.ts`. Uses the container's own
- * discord.js client (no REST-token plumbing — discord.js handles it).
+ * Uses the container's own discord.js client (no REST-token plumbing —
+ * discord.js handles it).
  */
 
 import { readFile, stat } from 'node:fs/promises'
@@ -135,9 +134,9 @@ export async function createRecordingThread(
     // Discord's 100-char thread-name cap.
     const base = rawName.length > 96 ? rawName.slice(0, 96) : rawName
 
-    // Every recording gets its OWN thread (owner decision 2026-08-07 — the
-    // core-side same-day reuse is gone), so same-day names now collide by
-    // design. De-duplicate with a numeric suffix: base, "base 2", "base 3".
+    // Every recording gets its OWN thread (owner decision 2026-08-07), so
+    // same-day names collide by design. De-duplicate with a numeric suffix:
+    // base, "base 2", "base 3".
     // Best-effort: if the listing fails, post under the plain name rather
     // than blocking the recording thread.
     let threadName = base

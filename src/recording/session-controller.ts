@@ -4,8 +4,7 @@
  * Owns one recording's full lifecycle: a {@link VoiceCapture} (Discord voice
  * connection), a {@link PcmCapture} (mp3-mix disk writer), a
  * {@link RecordingSession} (per-speaker Deepgram transcription), and a
- * {@link ConsentManager} (in-Discord button consent). Replaces core-server's
- * `disrecord/index.ts` role for a single session.
+ * {@link ConsentManager} (in-Discord button consent).
  *
  * Lifecycle:
  *   start()  → mkdir temp → join voice (capture ASAP) → create thread + wire consent surface
@@ -40,8 +39,8 @@
  * needing to know which one it is in.
  *
  * Every stop, whoever asked for it, is reported home with its reason
- * ({@link StopReason}) so the platform's bookkeeping can never again outlive
- * the recording (cfg-core-server#366).
+ * ({@link StopReason}) so the platform's bookkeeping never outlives the
+ * recording (cfg-core-server#366).
  */
 
 import { copyFile, mkdir, mkdtemp, rm } from 'node:fs/promises'
@@ -77,8 +76,8 @@ import type { OutputSink } from './output-sink.js'
 import type { Logger } from '../logger.js'
 
 /**
- * Periodic CT billing tick cadence. 15 min matches core-server's existing
- * uptime-tick cadence (ported from the legacy `worker.ts`).
+ * Periodic CT billing tick cadence. 15 min matches core-server's uptime-tick
+ * cadence.
  */
 const BILLING_TICK_MINUTES = 15
 
@@ -315,10 +314,9 @@ export class SessionController {
    */
   private insufficientStopFired = false
   /**
-   * Tracks ACTIVE (un-paused) time for the billing tick. Replaces the old
-   * single sliding anchor, which discarded the active sub-window whenever a
-   * tick boundary landed during a pause (prod incident 2026-06-23: a session
-   * paused at ~10 min billed only the post-tick sliver, ~1 of ~10 active min).
+   * Tracks ACTIVE (un-paused) time for the billing tick, so a tick boundary
+   * that lands during a pause never discards the active sub-window (see
+   * {@link ActiveTimeMeter}).
    */
   private readonly billingMeter = new ActiveTimeMeter()
   /**
@@ -379,9 +377,9 @@ export class SessionController {
    * message, so a reader watches the line refine itself and then settle into
    * the paragraph.
    *
-   * Previously the slot was cleared on every final, so a monologue split into
-   * 30 finals became 30 messages — past Discord's ~5-per-5s ceiling, where
-   * 429s silently drop lines (#11).
+   * Clearing the slot on every final would turn a monologue split into 30
+   * finals into 30 messages — past Discord's ~5-per-5s ceiling, where 429s
+   * silently drop lines (#11).
    */
   private webhookManager: SpeakerWebhookManager | null = null
   private openParagraphs = new Map<string, OpenParagraph>()
@@ -482,8 +480,8 @@ export class SessionController {
       logger: this.logger,
     })
     // ── The container's OWN settings for this channel ──────────────────────
-    // Scene over world defaults, field by field. Since Track A step 8 this is
-    // the ONLY source of Deepgram keywords/keyterms — the session policy
+    // Scene over world defaults, field by field. This is the ONLY source of
+    // Deepgram keywords/keyterms — the session policy
     // carries the consent set and nothing operational. Without boosts the
     // model misses player names ("Keyway" instead of "Keawe"), monster names,
     // jargon, etc.; hosted installations get the file written by core (the
@@ -531,8 +529,8 @@ export class SessionController {
       deepgramModel: p.deepgramModel,
       language: p.deepgramLanguage,
       consentedUserIds: this.consent.consentedIds(),
-      // The settings store is the ONLY keyword source since Track A step 8 —
-      // the session policy stopped carrying operational config. Absent means
+      // The settings store is the ONLY keyword source — the session policy
+      // carries no operational config. Absent means
       // "nothing configured" and an explicit `[]` means "no boosts"; both
       // reach RecordingSession as no boosts, so no merge is left here.
       keywords: channelSettings.keywords,
@@ -684,9 +682,9 @@ export class SessionController {
     // Discord notification pointing at the thread, AND carries the 3-button
     // consent row that is the consent surface for everyone-in-voice-at-start.
     // Posted unconditionally whenever a thread exists — NOT gated on
-    // `invokerUserId` (issue #5: auto-started sessions have no invoker, so the
-    // old `if (p.invokerUserId)` gate meant non-speakers were never prompted
-    // and `firstThreadMessageId` — the Back-to-Top anchor — was never set).
+    // `invokerUserId` (issue #5: auto-started sessions have no invoker, so an
+    // invoker gate would leave non-speakers unprompted and
+    // `firstThreadMessageId` — the Back-to-Top anchor — unset).
     // The returned message id anchors the end-of-session Back-to-Top link.
     if (this.threadId) {
       this.firstThreadMessageId = await this.consent.postSessionStart(
@@ -734,8 +732,8 @@ export class SessionController {
     // The separate `transcription` surcharge tick fires only when this
     // session runs on the platform Deepgram key (`effectiveMode ===
     // 'platform'`). BYOK or disabled transcription ⇒ server uptime only, no
-    // surcharge. Intent comes from the session's own mode — not from the
-    // legacy rate env — and the platform-key-missing edge is covered by the
+    // surcharge. Intent comes from the session's own mode — not from any
+    // rate env — and the platform-key-missing edge is covered by the
     // delivery gate: no key ⇒ no transcripts ⇒ `transcriptionDelivered`
     // stays false ⇒ no surcharge posted.
     this.transcriptionBilled = p.cfg != null && effectiveMode === 'platform'
@@ -837,21 +835,21 @@ export class SessionController {
    * Apply a consent update pushed over the control API.
    *
    * Drives the ConsentManager directly. Routing this solely through
-   * `consentSync` made the endpoint a silent no-op in self-host mode, where
-   * that bridge is never constructed: the push returned 204, the capture gate
-   * never opened, and the session recorded zero bytes with no error (#7).
+   * `consentSync` would make the endpoint a silent no-op in self-host mode,
+   * where that bridge is never constructed: the push would return 204, the
+   * capture gate never open, and the session record zero bytes with no error (#7).
    * Both apply methods are idempotent, so the CFG-hosted bridge below can
    * safely re-apply the same update on its way to core-server bookkeeping.
    */
   pushConsent(userId: string, consented: boolean, remember = false): void {
     // Route through the SAME rule the Discord buttons use, rather than poking
-    // the gate directly. Applying alone made every API decision this-session-
-    // only — declines included, which must always persist so someone who said
-    // no is not asked again next week.
+    // the gate directly. Applying alone would make every API decision
+    // this-session-only — declines included, which must always persist so
+    // someone who said no is not asked again next week.
     //
     // Self-host: the persistent-decision listener above writes the store.
     // CFG-hosted: no listener is wired (core owns RecordingConsent), so this
-    // emits to nobody and the push behaves exactly as before.
+    // emits to nobody and the push is a plain apply.
     this.consent.applyExternalDecision(userId, consented, remember)
     this.consentSync?.applyPushedUpdate(userId, consented)
   }

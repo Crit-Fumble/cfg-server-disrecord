@@ -1,7 +1,7 @@
 # No trailing slash: `node_modules/` matches directories only, so a symlink
 # named node_modules slips past it and gets committed. A self-referential one
 # puts an infinite loop on PATH via node_modules/.bin and every bare command
-# dies with ELOOP — npm exits 194 with no output. Cost two outages already.
+# dies with ELOOP — npm exits 194 with no output.
 node_modules
 **/node_modules
 dist/

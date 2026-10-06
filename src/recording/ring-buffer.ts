@@ -2,9 +2,6 @@
  * RecordingRingBuffer — bounded in-memory queue for PCM chunks under
  * WriteStream backpressure.
  *
- * Ported verbatim from cfg-core-server's `services/recording/recording-buffer.ts`,
- * with the logger swapped for this repo's pino instance.
- *
  * A 2-hour 5-speaker session can generate 3.5 GB of PCM in the hot path.
  * When disk writes fall behind the audio rate, we must either block the
  * event loop (bad), buffer unboundedly (worse), or drop the oldest audio

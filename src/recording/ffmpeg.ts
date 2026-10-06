@@ -1,9 +1,8 @@
 /**
  * FFmpeg utilities — spawn wrapper, arg builder, and ffprobe duration probe.
  *
- * Ported verbatim from cfg-core-server's `services/recording/ffmpeg.ts`,
- * with the logger swapped for this repo's pino instance. Used by
- * post-process.ts (mix + trim) and audio-splitter.ts (silence detect + split).
+ * Used by post-process.ts (mix + trim) and audio-splitter.ts (silence detect +
+ * split).
  */
 
 import { execFile, spawn } from 'node:child_process'

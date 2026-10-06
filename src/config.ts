@@ -102,8 +102,8 @@ export interface StandaloneConfig {
   settingsPath: string
   /**
    * Real-time mp3 chunking cadence in minutes (#131). `0` (the default)
-   * disables chunking — the session behaves exactly as before, producing only
-   * the whole-session mp3 at stop(). When `> 0`, a chunk mp3 covering the last
+   * disables chunking — the session produces only the whole-session mp3 at
+   * stop(). When `> 0`, a chunk mp3 covering the last
    * window is posted into the transcript thread every N minutes (and on
    * pause/stop). Keep it small enough that a chunk stays under Discord's ~9 MB
    * cap (≈1 MB/min of mixed audio ⇒ 8 is a safe default when enabled).
@@ -170,9 +170,7 @@ export interface CfgHostedConfig {
   /**
    * Container instance size — informational only (ledger label text). The
    * worker knows NO prices: it meters active minutes and core prices every
-   * tick from the session's persisted size. Requires a core build with
-   * core-side tick pricing (cfg-core-server#305) — do not pin this worker
-   * image into prod ahead of it.
+   * tick from the session's persisted size.
    */
   size: string
   /** Object-storage credentials — when present the container uploads finalized mp3/VTT. */
@@ -212,8 +210,7 @@ export function resolveCfgHostedConfig(): CfgHostedConfig | undefined {
   // No billing rates are read here — deliberately. The worker meters
   // active minutes; core prices them from the session's persisted size
   // (billing is handled only in core projects). The old DISRECORD_CT_PER_MIN
-  // / DISRECORD_TRANSCRIPTION_CT_PER_MIN envs are ignored if still injected
-  // by an older core build.
+  // / DISRECORD_TRANSCRIPTION_CT_PER_MIN envs are ignored if injected.
 
   let objectStorage: ObjectStorageConfig | undefined
   const storageKey = process.env.DO_SPACES_KEY

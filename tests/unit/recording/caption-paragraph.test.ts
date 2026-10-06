@@ -1,9 +1,9 @@
 /**
  * Thread captions coalesce consecutive finals into a paragraph (#11).
  *
- * Edit-in-place already solved interim → final WITHIN one utterance, but
- * nothing coalesced final → final. A monologue segmented into 30 finals became
- * 30 thread messages — past Discord's ~5-per-5s ceiling, where 429s start
+ * Edit-in-place handles interim → final WITHIN one utterance; this coalesces
+ * final → final. Without it a monologue segmented into 30 finals becomes 30
+ * thread messages — past Discord's ~5-per-5s ceiling, where 429s start
  * dropping lines silently, and a wall of one-liners in the artifact people
  * scroll back through.
  *

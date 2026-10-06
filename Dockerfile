@@ -66,15 +66,15 @@ COPY --from=builder /app/package.json  ./package.json
 
 ENV NODE_ENV=production
 
-# The HTTP control server runs on this port (default 8080). Local-only it
-# binds 127.0.0.1 — publish it with `-p 127.0.0.1:8080:8080`; CFG-hosted it
-# binds 0.0.0.0 with JWT auth.
+# The HTTP control server runs on this port (default 8080). The image binds
+# 0.0.0.0 in both modes — publish it with `-p 127.0.0.1:8080:8080`; CFG-hosted
+# it verifies a per-session JWT, local-only it requires CONTROL_TOKEN.
 # ⛔ A loopback bind inside a container is unreachable through `docker run -p`:
-# Docker forwards to the container's eth0, not its loopback. Shipping the app's
-# bare-metal default here produced a container that booted, connected to
-# Discord, reported healthy from inside — and served nothing at all to the host.
-# The dashboard and the entire control API were dead, so there was no way to
-# start a recording.
+# Docker forwards to the container's eth0, not its loopback. With the app's
+# bare-metal default (127.0.0.1) the container boots, connects to Discord,
+# reports healthy from inside — and serves nothing at all to the host: the
+# dashboard and the entire control API are dead, so there is no way to start a
+# recording.
 #
 # `assertOpenSurfaceBindIsSafe` is what keeps this honest: with a wide bind the
 # container REFUSES to boot unless CONTROL_TOKEN is set. Publishing a port makes

@@ -1,15 +1,14 @@
 /**
  * The container's own settings reach a recording.
  *
- * Steps 1-2 gave DisRecord a settings document and an API; step 3 wired it,
- * and step 8 made it the ONLY operational source — the platform's session
- * policy carries the consent set and nothing else. The rules pinned here:
+ * The settings document is the ONLY operational source — the platform's
+ * session policy carries the consent set and nothing else. The rules pinned
+ * here:
  *
  *   1. Keywords/keyterms come from the settings store ALONE. Even a policy
- *      that still carries legacy keyword fields (an older core-server) must
- *      not leak them into the session — that round-trip was cut deliberately,
- *      and the fake policy below still serves them so re-consuming them goes
- *      red here.
+ *      that carries legacy keyword fields (an older core-server) must not leak
+ *      them into the session — that round-trip is cut deliberately, and the
+ *      fake policy below serves them so re-consuming them goes red here.
  *   2. An EMPTY array is a real value, not an absence. A channel that sets
  *      `keywords: []` wants no boosts.
  */
@@ -79,8 +78,8 @@ function fakeClient() {
 }
 
 /**
- * A CFG-hosted core client whose policy STILL carries the legacy keyword
- * fields, the way a pre-step-8 core-server does. Nothing may read them.
+ * A CFG-hosted core client whose policy carries the legacy keyword fields,
+ * the way an older core-server's does. Nothing may read them.
  */
 function coreWithPolicyKeywords(): CoreServerClient {
   return {
@@ -153,7 +152,7 @@ describe('SessionController — the container’s own settings', () => {
   it('nothing configured means NO boosts — legacy policy keywords are ignored (step 8)', async () => {
     await start()
     // The fake policy serves ['policy-kw']/['policy-kt']; consuming either
-    // would rebuild the round-trip step 8 cut.
+    // would rebuild a round-trip that is cut on purpose.
     expect(builtWith().keywords).toBeUndefined()
     expect(builtWith().keyterms).toBeUndefined()
   })
@@ -198,8 +197,8 @@ describe('SessionController — the container’s own settings', () => {
       }),
     } as never
     await start({ settingsStore: broken })
-    // The recording still boots; it just runs without boosts. (Pre-step-8
-    // this fell back to policy keywords — that source is gone.)
+    // The recording still boots; it just runs without boosts — there is no
+    // policy-keyword fallback.
     expect(mockRecordingSession).toHaveBeenCalledTimes(1)
     expect(builtWith().keywords).toBeUndefined()
   })

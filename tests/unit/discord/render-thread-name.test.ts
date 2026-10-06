@@ -1,9 +1,8 @@
 /**
  * Thread-name templates.
  *
- * `threadNameTemplate` was collected by the settings UI for months with NOTHING
- * rendering it — the container named threads itself and never received the
- * value. This is the renderer, so these are the rules it has to keep.
+ * This is the `threadNameTemplate` renderer, so these are the rules it has to
+ * keep.
  */
 
 import { renderThreadName } from '../../../src/discord/thread-poster.js'

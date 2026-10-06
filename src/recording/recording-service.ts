@@ -121,8 +121,8 @@ export class RecordingService {
 
     // Transcription is on unless the session's Deepgram mode is 'disabled'
     // (and the caller didn't opt out). Platform mode has no static key — the
-    // container mints grant tokens — so a missing `deepgramKey` no longer
-    // forces record-only; only mode='disabled' does.
+    // container mints grant tokens — so a missing `deepgramKey` does not
+    // force record-only; only mode='disabled' does.
     const transcription =
       this.config.deepgramMode !== 'disabled' && (req.transcription ?? true)
 
@@ -196,12 +196,12 @@ export class RecordingService {
    * logged but not rethrown; the registry slot is always released so
    * subsequent starts in the same guild work.
    *
-   * Previously this was fire-and-forget (`void controller.stop()`); the
-   * HTTP endpoint returned 202 immediately, core-server then killed the
-   * container mid-runStop, and the mp3 + VTT + Back-to-Top never landed
-   * in Discord. With this change the endpoint blocks until delivery —
-   * caller-side timeout (~10 min by default in core-server's control
-   * client) is the upper bound on stop latency.
+   * Fire-and-forget (`void controller.stop()`) would let the HTTP endpoint
+   * return immediately, core-server would then kill the container
+   * mid-runStop, and the mp3 + VTT + Back-to-Top would never land in
+   * Discord. So the endpoint blocks until delivery — caller-side timeout
+   * (~10 min by default in core-server's control client) is the upper bound
+   * on stop latency.
    */
   async stop(recordingId: string): Promise<void> {
     const controller = this.require(recordingId)

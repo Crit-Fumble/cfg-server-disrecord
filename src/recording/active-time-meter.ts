@@ -1,10 +1,9 @@
 /**
  * ActiveTimeMeter — accumulates ACTIVE (un-paused) recording time for billing.
  *
- * Replaces the old single sliding anchor in {@link SessionController}, which
- * discarded the active sub-window whenever a billing-tick boundary landed
- * during a pause. Prod incident 2026-06-23: a session recorded ~10 min, was
- * auto-paused, then the 15-min tick fired while paused and slid the anchor
+ * A single sliding anchor discards the active sub-window whenever a
+ * billing-tick boundary lands during a pause: a session records ~10 min, is
+ * auto-paused, then the 15-min tick fires while paused and slides the anchor
  * forward — billing only the ~1-min post-tick sliver instead of the ~10 active
  * minutes.
  *

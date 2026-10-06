@@ -4,7 +4,7 @@
  * In the CFG-hosted path consent has TWO sources that must converge on the
  * one {@link ConsentManager} a recording owns:
  *
- *   1. In-Discord buttons   — handled directly by ConsentManager (Phase 1).
+ *   1. In-Discord buttons   — handled directly by ConsentManager.
  *   2. core-server          — the platform already holds RecordingConsent
  *                             rows (set via the web UI / prior sessions).
  *

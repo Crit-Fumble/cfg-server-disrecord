@@ -2,19 +2,19 @@
  * ConsentManager — in-Discord button consent flow for the standalone
  * recording container.
  *
- * Phase 1's ONLY consent source: when a recording starts, the invoker (or
- * everyone in voice) is prompted via Discord buttons; a late joiner who
- * starts speaking is prompted on the spot. The manager holds the consented
- * `Set` and notifies listeners (PcmCapture + RecordingSession) when it
- * changes so a mid-session `Allow` opens that speaker's stream immediately.
+ * When a recording starts, the invoker (or everyone in voice) is prompted via
+ * Discord buttons; a late joiner who starts speaking is prompted on the spot.
+ * The manager holds the consented `Set` and notifies listeners (PcmCapture +
+ * RecordingSession) when it changes so a mid-session `Allow` opens that
+ * speaker's stream immediately.
  *
  * Consent semantics — opt-out by default: a user who never clicks ends up
  * NOT consented, so their audio is dropped and their captions redacted.
  *
- * Extracted from cfg-core-server's `RecordingCapability` late-joiner flow
- * (`requestLateJoinerConsent`) + `consent-collector.ts`. The DB-row +
- * persistent-consent machinery is intentionally dropped — Phase 1 keeps no
- * database; consent lives only in process memory for the session's life.
+ * No database here: session consent lives in process memory for the
+ * session's life, and a decision that should outlive it goes to
+ * {@link ConsentManager.onPersistentDecision} (self-host) or to core
+ * (CFG-hosted).
  */
 
 import {
@@ -269,15 +269,15 @@ export class ConsentManager {
    *      arrives later, and it is deliberately NOT gated on consent state.
    *   2. A consent prompt, only when they have no decision yet.
    *
-   * ⚠️ Step 1 must stay ABOVE the `seen` gate. It used to happen only as a
-   * side effect of prompting, inside `tryPostToThread` — so the one class
-   * of user who is never prompted was also never added: a holder of a
-   * persistent channel-level opt-in. `ConsentSync.seedFromPolicy` applies
-   * `applyConsent` for every such user at session start (whether or not
-   * they are even in the call), which marks them `seen` + `consented`, so a
-   * mid-session join returned at the first line and they silently lost
-   * access to the transcript and mp3 of a session they were recorded in.
-   * The most cooperative users were the ones locked out.
+   * ⚠️ Step 1 must stay ABOVE the `seen` gate, and must not be a side effect
+   * of prompting (`tryPostToThread`): the one class of user who is never
+   * prompted — a holder of a persistent channel-level opt-in — would never
+   * be added. `ConsentSync.seedFromPolicy` applies `applyConsent` for every
+   * such user at session start (whether or not they are even in the call),
+   * which marks them `seen` + `consented`, so behind the gate a mid-session
+   * join returns at the first line and they silently lose access to the
+   * transcript and mp3 of a session they were recorded in — the most
+   * cooperative users locked out.
    *
    * Idempotent at both steps.
    */
@@ -433,11 +433,10 @@ export class ConsentManager {
     const lead = mentions ? `${mentions} — s` : 'S'
     // Embed the 3-button consent row directly on the ping so everyone
     // sees the opt-in/opt-out controls without a separate per-member
-    // prompt. This replaces the old promptInitial fan-out — that path
-    // skipped anyone already pre-consented (via the session-policy seed)
-    // and left them with no in-thread revoke button, which contradicted
-    // the session-policy documentation. Late joiners who weren't in
-    // voice at start still get their own prompt via noteSpeaker().
+    // prompt — including anyone already pre-consented via the
+    // session-policy seed, who gets no prompt of their own and would
+    // otherwise have no in-thread revoke button. Late joiners who weren't
+    // in voice at start still get their own prompt via noteSpeaker().
     const content =
       `${lead}tarting a ${kindLabel}.\n\n` +
       '🔁 **Yes, and remember** — voice is captured for this session AND future sessions in this channel.\n' +
@@ -583,10 +582,10 @@ export class ConsentManager {
 
     // No auto-decline timeout. The user can click Allow / Opt Out any
     // time during the session — pending stays pending (i.e. audio gated
-    // as redacted) until they explicitly decide. The previous 3-min
-    // window would silently flip a "not yet decided" user to declined,
-    // which surfaced as "I clicked Allow and nothing happened" when the
-    // click landed just after the window elapsed.
+    // as redacted) until they explicitly decide. An auto-decline window
+    // would silently flip a "not yet decided" user to declined, which
+    // surfaces as "I clicked Allow and nothing happened" when the click
+    // lands just after the window elapses.
   }
 
   /**
@@ -640,8 +639,8 @@ export class ConsentManager {
     // — but the two differ in what OUTLIVES the session, so the distinction is
     // carried through rather than collapsed here. CFG-hosted persists it in
     // core (`handleConsentButton`); self-host persists it via the
-    // persistent-decision listener. It used to be flattened at this line,
-    // which is why "Yes, and remember" did nothing at all in self-host.
+    // persistent-decision listener. Flattening it at this line would make
+    // "Yes, and remember" do nothing at all in self-host.
     const remember = action === 'consent_remember'
     const normalized = remember ? 'consent' : action
     if (normalized !== 'consent' && normalized !== 'decline') return

@@ -2,7 +2,7 @@
  * Unit tests for `buildDeepgramUrl` — the pure function that assembles the
  * Deepgram Live WebSocket URL from a caller's options.
  *
- * Locks in the invariants that caused real 400s during v0.9.0 testing:
+ * Locks in the invariants behind real 400s:
  *   - `interim_results` is auto-forced to `true` whenever `utterance_end_ms`
  *     is set (Deepgram rejects the combo otherwise)
  *   - Defaults match Discord voice audio (linear16, 48 kHz, 1 channel)

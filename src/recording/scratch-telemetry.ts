@@ -13,9 +13,6 @@
  * Measuring free space and PCM footprint immediately BEFORE the mix makes the
  * two cases distinguishable in the logs: if free bytes are already near zero,
  * it was capacity, not a race.
- *
- * A previous incarnation of this existed as `[disk-telemetry] tempdir usage`
- * and was lost when recording moved out of core-server.
  */
 
 import { stat, statfs } from 'node:fs/promises'

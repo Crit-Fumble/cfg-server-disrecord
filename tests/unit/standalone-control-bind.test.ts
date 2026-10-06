@@ -1,17 +1,14 @@
 /**
  * Which interface the control server binds.
  *
- * ⛔ The regression this pins cost the entire self-host Docker path: the app's
- * bare-metal default (`127.0.0.1`) was used inside the container too, and a
- * process bound to a container's loopback is unreachable through
- * `docker run -p` — Docker forwards to eth0. The container booted, connected to
- * Discord and reported healthy FROM INSIDE, while the dashboard and the whole
- * control API served nothing to the host. There was no way to start a
- * recording, and nothing anywhere said so.
- *
- * Verified empirically before the fix: `curl 127.0.0.1:<published>/healthz`
- * from the host got connection-refused while the same request inside the
- * container returned `{"ok":true,"botReady":true}`.
+ * ⛔ What this pins: the app's bare-metal default (`127.0.0.1`) must not be used
+ * inside the container. A process bound to a container's loopback is
+ * unreachable through `docker run -p` — Docker forwards to eth0. The container
+ * then boots, connects to Discord and reports healthy FROM INSIDE, while the
+ * dashboard and the whole control API serve nothing to the host: no way to
+ * start a recording, and nothing anywhere says so. (`curl
+ * 127.0.0.1:<published>/healthz` from the host gets connection-refused while
+ * the same request inside the container returns `{"ok":true,"botReady":true}`.)
  */
 
 import { resolveStandaloneConfig } from '../../src/config.js'

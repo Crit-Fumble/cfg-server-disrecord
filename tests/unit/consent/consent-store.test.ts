@@ -52,7 +52,7 @@ describe('FileConsentStore', () => {
     await write.set(GUILD, CHANNEL, 'user-1', 'opted-in')
     await write.set(GUILD, CHANNEL, 'user-2', 'opted-out')
 
-    // A new instance is the next session — this is the thing that was broken.
+    // A new instance is the next session.
     const read = new FileConsentStore({ path, logger: makeLogger() })
     const loaded = await read.load(GUILD, CHANNEL)
 
@@ -98,12 +98,11 @@ describe('FileConsentStore', () => {
     const logger = makeLogger()
     const store = new FileConsentStore({ path, logger })
 
-    // ⚠️ No read first. That ordering is the whole test: the guard used to be
-    // checked at the head of the write queue, but it is only ARMED by a read —
-    // so the first decision of a process sailed past it, read an empty
-    // document, and renamed that emptiness over every stored consent record.
-    // The original version of this test called load() here and passed while
-    // that bug was live.
+    // ⚠️ No read first. That ordering is the whole test: the guard is only
+    // ARMED by a read, so a guard checked at the head of the write queue lets
+    // the first decision of a process sail past it, read an empty document,
+    // and rename that emptiness over every stored consent record. A load()
+    // here would make this test pass with that bug live.
     await store.set(GUILD, CHANNEL, 'user-1', 'opted-in')
 
     // The operator's file is still exactly as they left it — a failed parse
@@ -118,8 +117,8 @@ describe('FileConsentStore', () => {
     const store = new FileConsentStore({ path, logger: makeLogger() })
 
     // Unreadable is the same danger as unparseable — an EACCES bind mount must
-    // not be silently replaced with an empty document. Only a PARSE failure
-    // used to arm the lock, so this case lost every stored decision.
+    // not be silently replaced with an empty document. If only a PARSE failure
+    // armed the lock, this case would lose every stored decision.
     await store.set(GUILD, CHANNEL, 'user-1', 'opted-in')
 
     await chmod(path, 0o600)

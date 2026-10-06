@@ -34,25 +34,24 @@ import { DASHBOARD_HTML } from './dashboard-html.js'
  * Refuse to serve the dashboard on a non-loopback bind without a
  * `CONTROL_TOKEN`.
  *
- * The self-host control server binds `127.0.0.1`, and the "no token ⇒ every
- * request allowed" rule is only defensible because of that. A dashboard
- * inherits the same bind — so if the bind ever widens, the token has to stop
- * being optional. A boot-time refusal beats a line in the docs: the failure it
- * prevents is an open, unauthenticated recording surface on a public
+ * The self-host control server defaults to a `127.0.0.1` bind, and the "no
+ * token ⇒ every request allowed" rule is only defensible because of that. A
+ * dashboard inherits the same bind — so when the bind widens, the token has to
+ * stop being optional. A boot-time refusal beats a line in the docs: the
+ * failure it prevents is an open, unauthenticated recording surface on a public
  * interface, which is not something anyone should learn about from a doc they
  * did not read.
  *
- * Today `standalone.ts` hardcodes the loopback bind in self-host, so this
- * cannot fire. It exists for whoever makes that configurable.
+ * Self-host takes `CONTROL_HOST`, which the image sets to 0.0.0.0, so in the
+ * container this is what makes `CONTROL_TOKEN` required.
  */
 export function assertOpenSurfaceBindIsSafe(
   host: string,
   controlToken: string | undefined,
   /**
    * What is about to be served, for the error message. Defaults to the
-   * dashboard, which is what this originally guarded; the settings write API
-   * asks the identical question, so it reuses this rather than restating the
-   * reasoning.
+   * dashboard; the settings write API asks the identical question, so it
+   * reuses this rather than restating the reasoning.
    */
   surface = 'self-host dashboard',
 ): void {

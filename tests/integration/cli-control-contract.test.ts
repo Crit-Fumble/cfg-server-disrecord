@@ -62,7 +62,7 @@ describe('CLI → control server', () => {
     process.exitCode = undefined
   })
 
-  // Regression: #8 — `disrecord stop <id>` always 400'd, so the route never ran.
+  // Regression guard (#8): `disrecord stop <id>` must reach the route, not 400.
   it('stop reaches the route and does not fail the process', async () => {
     await runCli(['stop', 'rec-1'])
 

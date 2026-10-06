@@ -59,10 +59,9 @@ function redactDeepgramUrlForLog(url: string): string {
   }
 }
 // Deepgram closes idle WebSocket connections after a ~10-12s inactivity
-// timeout. The 2026-05-12 prod session log shows 9 mid-session closes
-// across a 2-hour TTRPG session — every silence longer than ~10s triggered
-// a reconnect, each costing 1-3s of WS handshake on the next utterance
-// before audio could resume streaming. See cfg-core-server #63.
+// timeout, so without a keepalive every silence longer than ~10s triggers a
+// reconnect, each costing 1-3s of WS handshake on the next utterance before
+// audio can resume streaming. See cfg-core-server #63.
 //
 // 4s gives 6-8s of headroom against the 10-12s timeout, comfortably
 // absorbing network jitter. Lower (3s) is also documented by Deepgram
