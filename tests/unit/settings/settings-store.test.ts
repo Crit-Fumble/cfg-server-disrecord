@@ -312,12 +312,11 @@ describe('FileSettingsStore', () => {
     const logger = makeLogger()
     const store = new FileSettingsStore({ path, logger })
 
-    // ⚠️ No read first. That ordering is the whole test: the guard used to be
-    // checked at the head of the write queue, but it is only ARMED by a read —
-    // so the first operation of a process sailed past it, read an empty
-    // document, and renamed that emptiness over the operator's config.
-    // The original version of this test called load() here and passed while
-    // that bug was live.
+    // ⚠️ No read first. That ordering is the whole test: the guard is only
+    // ARMED by a read, so a guard checked at the head of the write queue lets
+    // the first operation of a process sail past it, read an empty document,
+    // and rename that emptiness over the operator's config. A load() here
+    // would make this test pass with that bug live.
     await expect(store.setScene(GUILD, CHANNEL, { keywords: ['x'] })).rejects.toThrow(SettingsWriteError)
 
     expect(await readFile(path, 'utf-8')).toBe('{ not json at all')
@@ -381,7 +380,7 @@ describe('FileSettingsStore', () => {
     const store = new FileSettingsStore({ path, logger: makeLogger() })
 
     // The read path drops non-snowflake keys (parseSettingsFile). Without this
-    // guard a write with a malformed id succeeded, landed on disk, and was gone
+    // guard a write with a malformed id would succeed, land on disk, and be gone
     // by the next read — a silent write-then-lose. Loud beats silent.
     await expect(store.setScene('guild-1', CHANNEL, { keywords: ['x'] })).rejects.toThrow(/snowflake/)
     await expect(store.setScene(GUILD, 'vc-1', { keywords: ['x'] })).rejects.toThrow(/snowflake/)

@@ -8,17 +8,17 @@
  * Discord routes the click to core-server's webhook, which writes a
  * channel-scoped `PersistentRecordingConsent` row.
  *
- * Self-host has no webhook and no database, so `consent_remember` collapsed to
- * a plain one-session consent and the "remember" half silently did nothing.
- * The button promised something the container could not deliver. This is the
- * smallest thing that makes it true.
+ * Self-host has no webhook and no database, so without this store
+ * `consent_remember` would collapse to a plain one-session consent and the
+ * "remember" half would silently do nothing — the button would promise
+ * something the container could not deliver. This is the smallest thing that
+ * makes it true.
  *
  * ## Scope
  *
  * Deliberately ONE concern: a channel-scoped opt-in / opt-out per Discord user,
  * which is exactly the scope core uses for this surface. Not a general settings
- * store — per-channel keywords, auto-start and thread templates stay
- * core-side/env-driven until something actually needs them here.
+ * store — per-channel settings live in `settings/settings-store.ts`.
  *
  * ⚠️ Never constructed CFG-hosted. Core owns persistent consent there, and two
  * writers would mean reconciling them — see the session controller's `cfg`
@@ -110,11 +110,11 @@ export class FileConsentStore implements ConsentStore {
   ): Promise<void> {
     const run = this.tail.then(async () => {
       // ⛔ The write lock is NOT checked here, deliberately. It is armed by
-      // `read()` BELOW, so a check at this point passed on the first decision
-      // of a process, the read then armed it and returned an empty document,
-      // and the write renamed that emptiness over the unreadable file —
-      // destroying every stored consent decision. The guard now lives in
-      // `write()`, the only place that can actually destroy anything.
+      // `read()` BELOW, so a check at this point would pass on the first
+      // decision of a process, the read would then arm it and return an empty
+      // document, and the write would rename that emptiness over the
+      // unreadable file — destroying every stored consent decision. The guard
+      // lives in `write()`, the only place that can actually destroy anything.
       const file = await this.read()
       const key = channelKey(guildId, voiceChannelId)
       file.channels[key] = { ...(file.channels[key] ?? {}), [discordUserId]: status }
@@ -167,8 +167,8 @@ export class FileConsentStore implements ConsentStore {
 
   private async write(file: ConsentFile): Promise<void> {
     // ⛔ THE GUARD LIVES HERE — the only place that can destroy a consent
-    // record. It used to sit at the head of the write queue, which armed too
-    // late to help on a process's first decision. See the note in `set`.
+    // record. At the head of the write queue it would arm too late to help on
+    // a process's first decision. See the note in `set`.
     if (this.readOnlyBecauseCorrupt) {
       this.logger.error(
         { path: this.path },

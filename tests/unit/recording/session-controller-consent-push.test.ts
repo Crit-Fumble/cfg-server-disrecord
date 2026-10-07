@@ -2,12 +2,13 @@
  * Control-API consent push must actually flip the capture gate — in BOTH
  * hosting modes.
  *
- * Regression for #7: `pushConsent` delegated solely to `consentSync`, which is
- * only constructed when `cfg` is present. In self-host mode the optional chain
- * evaporated and `POST /v1/recordings/:id/consent` returned 204 having changed
- * nothing. Because `pcm-capture` gates every write on `isConsented`, the
- * recording then captured zero bytes with no error anywhere — the failure
- * surfaced only as `speakerCount: 0` and "nothing recorded".
+ * Regression guard for #7: a `pushConsent` that delegates solely to
+ * `consentSync` — only constructed when `cfg` is present — is a no-op in
+ * self-host mode: the optional chain evaporates and
+ * `POST /v1/recordings/:id/consent` returns 204 having changed nothing. Because
+ * `pcm-capture` gates every write on `isConsented`, the recording then captures
+ * zero bytes with no error anywhere — the failure surfaces only as
+ * `speakerCount: 0` and "nothing recorded".
  *
  * The contract under test is mode-independent: a pushed consent update flips
  * `ConsentManager`, whether or not the CFG-hosted bridge exists.

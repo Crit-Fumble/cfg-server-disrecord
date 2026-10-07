@@ -230,7 +230,7 @@ export const DASHBOARD_HTML = `<!doctype html>
 
   <footer>
     Slash commands are not part of this container — it has no command surface by
-    design. A consuming bot drives it over this same API; see <code>docs/SETUP.md</code>.
+    design. A consuming bot drives it over this same API; see <code>README.md</code>.
   </footer>
 </main>
 <div id="toast"></div>

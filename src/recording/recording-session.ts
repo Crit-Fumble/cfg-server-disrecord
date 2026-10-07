@@ -2,14 +2,13 @@
  * RecordingSession — per-session orchestrator that fans out per-speaker PCM
  * audio to Deepgram and emits finalized transcripts via callback.
  *
- * Ported from cfg-core-server's TranscriptionCapability (#119), trimmed of
- * CFG-internal coupling: no MessageBatcher (caller handles output), no SSE
- * publish (caller hooks via callback), no perf-burst instrumentation (added
- * later if needed). Carries the cfg-core-server#63 fix forward — streams
- * stay open across silence, only torn down on `stop()` or mid-session decline.
+ * No CFG-internal coupling: no MessageBatcher (caller handles output), no SSE
+ * publish (caller hooks via callback), no perf-burst instrumentation. Streams
+ * stay open across silence (cfg-core-server#63), only torn down on `stop()` or
+ * mid-session decline.
  *
  * The session-level concerns (Discord voice connection, opus → PCM decode,
- * speaker subscribe/unsubscribe) live in voice-receiver.ts and call this
+ * speaker subscribe/unsubscribe) live in gateway/voice-capture.ts and call this
  * class's onSpeakerStart/onSpeakerData/onSpeakerEnd methods.
  */
 
@@ -21,15 +20,9 @@ import type { Logger } from '../logger.js'
 export const OPUS_SAMPLE_RATE = 48_000
 
 /**
- * Deepgram fragmentation-biased tuning. Originally 4000ms in cfg-core-server
- * (#359 / 2026-04) — chosen to keep complex multi-sentence thoughts grouped
- * — but tuned down to 1500ms after live-test feedback that the 4s wait
- * before a final transcript made the live thread captions feel unresponsive.
- * 1.5s is comfortably past natural in-sentence breaths while still feeling
- * snappy when the speaker stops to think. WS connections stay open across
- * utterances (cfg-core-server#63), so finalizing more often is purely a
- * segmentation choice — the language model's session-level context is
- * unaffected.
+ * Deepgram segmentation tuning — see each field below. WS connections stay open
+ * across utterances (cfg-core-server#63), so a finalize closes a segment, not
+ * the stream.
  */
 export interface DeepgramStreamTuning {
   utteranceEndMs: number
@@ -48,20 +41,20 @@ export const DEEPGRAM_STREAM_TUNING: DeepgramStreamTuning = {
    * endpoint on something it never receives, and the timer in onSpeakerEnd is
    * what actually closes the segment.
    *
-   * Raised 1500 → 3000 (2026-07-22, owner request: trade latency for accuracy
-   * until transcription moves in-house). At 1500 a speaker who pauses ~2s
-   * between sentences got a forced finalize at EVERY sentence break, which
-   * caused both reported problems at once:
+   * 3000 (owner request, 2026-07-22: trade latency for accuracy until
+   * transcription moves in-house). At 1500 a speaker who pauses ~2s between
+   * sentences gets a forced finalize at EVERY sentence break, which causes two
+   * problems at once:
    *
    *   - short segments starve the model of context, so context-resolvable
    *     phrases degrade ("Encourage" heard as "In College") — see #10
-   *   - one message per final, so a slow monologue posted dozens of thread
+   *   - one message per final, so a slow monologue posts dozens of thread
    *     messages per minute — see #11
    *
    * 3000ms merges sentences separated by a normal speaking pause into one
-   * segment. Cost: a final lands up to 1.5s later than before. The interim
+   * segment. Cost: a final lands up to 1.5s later than at 1500. The interim
    * caption already shows live text, so perceived latency barely moves —
-   * latency was never the complaint, accuracy was.
+   * accuracy, not latency, is what this trades for.
    */
   utteranceEndMs: 3000,
   /**
@@ -70,11 +63,10 @@ export const DEEPGRAM_STREAM_TUNING: DeepgramStreamTuning = {
    * burst (Discord's speaking hangover keeps frames flowing briefly); the
    * end-of-utterance case is handled by the forced Finalize above.
    *
-   * Earlier 500ms clipped the last 1–2 words off sentences that trailed off
-   * softly; 1000 fixed that. Raised to 2000 alongside utteranceEndMs so
-   * mid-sentence thinking pauses no longer split a thought in half. Must stay
-   * UNDER utteranceEndMs so the UtteranceEnd message still fires after the
-   * final.
+   * 500ms clips the last 1–2 words off sentences that trail off softly; 2000
+   * (set alongside utteranceEndMs) keeps mid-sentence thinking pauses from
+   * splitting a thought in half. Must stay UNDER utteranceEndMs so the
+   * UtteranceEnd message still fires after the final.
    */
   endpointing: 2000,
   /** Deepgram per-frame speech-detection telemetry; not consumed yet. */
@@ -266,8 +258,7 @@ export class RecordingSession {
   }
 
   async onSpeakerStart(userId: string): Promise<void> {
-    // Pause gate: ignore all speaker activity while paused. The worker
-    // honoring this matches the legacy in-process pause: no transcripts,
+    // Pause gate: ignore all speaker activity while paused — no transcripts,
     // no audio, no `[redacted]` markers from the pause window.
     if (this.paused) return
 
@@ -366,8 +357,8 @@ export class RecordingSession {
       // behind real time as silence accumulates. The mixed mp3, by contrast, is
       // silence-PADDED to wall clock — so using the Deepgram clock for global
       // placement piles captions into the early audio and starves the tail
-      // (prod 2026-06-23: a 91-min session capped captions at ~42 min and
-      // produced no VTT for the final mp3 parts). The final lands shortly after
+      // (a long session's captions stop well short of its end, and the final
+      // mp3 parts get no VTT). The final lands shortly after
       // the speech, so `now` ≈ utterance end; subtract the utterance's own
       // length for its start. Matches the wall-clock basis the redacted path
       // (onSpeakerStart / onSpeakerEnd) already uses.
@@ -439,9 +430,9 @@ export class RecordingSession {
     }
 
     // Keep the Deepgram WS open across silence — the keepalive frame holds
-    // it open on Deepgram's side, and closing-then-reopening on per-utterance
-    // basis cost 1-3s of reconnect handshake on the next utterance
-    // (cfg-core-server#63 — visible 9× in 2026-05-12 prod log).
+    // it open on Deepgram's side, and closing-then-reopening on a per-utterance
+    // basis costs 1-3s of reconnect handshake on the next utterance
+    // (cfg-core-server#63).
     //
     // Schedule a Deepgram Finalize after utteranceEndMs of wall-clock
     // silence so Deepgram emits a real final for this utterance even if

@@ -8,9 +8,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-24.04
-    # A hang here used to run to GitHub's 6h default. Two observed runs sat at
-    # 45m and 2h30m on `npm test` before anyone noticed, and because the job
-    # never CONCLUDED it never reported failure — CI was gating nothing.
+    # Without a timeout a hang here runs to GitHub's 6h default, and because the
+    # job never CONCLUDES it never reports failure — CI gates nothing.
     #
     # 25, not 10: `npm ci` alone takes ~11 minutes on this runner because
     # @discordjs/opus and @snazzah/davey compile from source. A 10-minute cap

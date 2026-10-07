@@ -5,7 +5,7 @@
  *     garbage parses to "none", never to an Invalid Date.
  *   - a stop the WORKER decided on (the controller's `onStopped`) releases the
  *     registry slot, so /healthz stops counting it and the guild is free to
- *     record again — the exact state that stranded the 2026-08-26 session.
+ *     record again.
  *   - `stop()` is a `control-stop`, `stopAll()` a `shutdown`, `promptEnd()`
  *     routes to the controller and 404s an unknown recording.
  */

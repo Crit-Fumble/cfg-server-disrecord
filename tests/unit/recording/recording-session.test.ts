@@ -219,7 +219,7 @@ describe('RecordingSession — transcript emission', () => {
       jest.setSystemTime(1_000_000 + 50_000) // 50s of wall clock elapses (mostly silence)
       const fakeStream = fakeStreamRegistry[0]
       // Deepgram word offsets are tiny (0.2..1.1s) because the socket is
-      // silence-suppressed — the OLD code placed this utterance at ~0.2s.
+      // silence-suppressed — anchoring to them would place this utterance at ~0.2s.
       fakeStream.emit('transcript', {
         transcript: 'late utterance',
         isFinal: true,

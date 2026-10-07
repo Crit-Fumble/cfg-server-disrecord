@@ -18,7 +18,7 @@
  *
  * That is the failure this module exists to name. The container already models
  * deployment MODE (`config.cfg != null`); interaction DELIVERY is a second,
- * independent, per-APPLICATION axis it could not previously observe.
+ * independent, per-APPLICATION axis, and this module is what observes it.
  *
  * ## Warn, never refuse
  *

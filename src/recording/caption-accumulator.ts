@@ -2,10 +2,9 @@
  * CaptionAccumulator — the session's transcript record, with a bounded heap.
  *
  * `SessionController` collects every finalized utterance for the whole
- * recording so post-processing can build the VTT at stop. That array used to
- * live on the controller and grow without any ceiling, which is a real
- * heap-growth path on the smallest CT tier for a session running to the 12hr
- * cap (#6).
+ * recording so post-processing can build the VTT at stop. Unbounded, that
+ * array is a real heap-growth path on the smallest CT tier for a session
+ * running to the 12hr cap (#6).
  *
  * Two things bound it here:
  *

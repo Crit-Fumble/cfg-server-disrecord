@@ -1,10 +1,9 @@
 /**
  * PCM silence-padding helper.
  *
- * Extracted from cfg-core-server's `RecordingCapability` (the
- * `padSilenceAndAppend` method + its constants) so `pcm-capture.ts` stays
- * under the 800-line cap. Pure-ish — the only state is a per-speaker byte
- * counter the caller owns and threads in.
+ * `padSilenceAndAppend` + its constants, kept apart from `pcm-capture.ts` so
+ * that file stays under the 800-line cap. Pure-ish — the only state is a
+ * per-speaker byte counter the caller owns and threads in.
  *
  * The mixer (`amix`) lays every per-speaker PCM file on the same timeline
  * by index. To keep speakers aligned, each speaker's file must have its

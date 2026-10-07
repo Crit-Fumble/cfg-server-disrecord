@@ -9,12 +9,11 @@
  * Each assertion is paired with a docs link so the next person fixing a
  * 400 can verify the contract without spelunking the same pages I did.
  *
- * History of real-world 400s these tests guard against:
- *   - Plural `keyterms` (we sent it, Deepgram wants singular `keyterm`).
- *   - `keywords` with `model=nova-3` (Nova-3 dropped keyword support;
+ * Real-world 400s these tests guard against:
+ *   - Plural `keyterms` (Deepgram wants singular `keyterm`).
+ *   - `keywords` with `model=nova-3` (Nova-3 has no keyword support;
  *     `keyterm` replaces it).
- *   - `utterance_end_ms` set without `interim_results=true` (Deepgram
- *     auto-forced wrong direction in earlier client builds).
+ *   - `utterance_end_ms` set without `interim_results=true`.
  *
  * Plus one opt-in reachability test that distinguishes "URL shape is
  * valid but auth failed" (HTTP 401) from "URL shape is wrong" (HTTP

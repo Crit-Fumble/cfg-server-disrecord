@@ -85,10 +85,10 @@ describe('planWindowReads', () => {
   })
 })
 
-// ── The redundant-final-chunk guard (owner report, 2026-08-07) ──────────────
+// ── The redundant-final-chunk guard ─────────────────────────────────────────
 //
-// A session shorter than one chunk window used to end as TWO identical mp3s in
-// the thread: the `final` flush (chunk 01, spanning the whole session) plus the
+// Without it, a session shorter than one chunk window ends as TWO identical mp3s
+// in the thread: the `final` flush (chunk 01, spanning the whole session) plus the
 // whole-session mp3. The guard skips the final cut only when its window still
 // starts at byte 0 — i.e. no interval/pause cut ever advanced the cursor.
 

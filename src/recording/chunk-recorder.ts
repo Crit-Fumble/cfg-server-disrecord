@@ -160,8 +160,8 @@ export class ChunkRecorder {
 
     // A `final` flush whose window still starts at byte 0 would be chunk 01
     // spanning the ENTIRE session — byte-for-byte the content of the
-    // whole-session mp3 that posts moments later, so short recordings ended
-    // as two identical files in the thread (owner report, 2026-08-07). Skip
+    // whole-session mp3 that posts moments later, so a short recording would
+    // end as two identical files in the thread. Skip
     // it: chunks exist to let listeners follow ALONG a long session, and a
     // session that never outlived its first window has nothing to follow.
     // Interval/pause cuts (reason !== 'final') still post from byte 0 —

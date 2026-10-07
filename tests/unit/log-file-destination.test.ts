@@ -80,15 +80,14 @@ describe('openLogFileDestination', () => {
     // Point OUTPUT_DIR at a path UNDER a regular file. `mkdirSync` there fails
     // with ENOTDIR synchronously on every platform.
     //
-    // This used to be '/proc/nonexistent-cannot-create'. That relied on /proc
-    // being unwritable — but /proc only exists on Linux, and there `mkdirSync`
-    // on it does not fail fast, it BLOCKS THE EVENT LOOP. On the Linux CI runner
-    // that hung the entire jest process forever: every suite reported PASS, then
-    // no summary and no exit, so the job never concluded and CI silently gated
-    // nothing (disrecord#13). macOS has no /proc, took a different branch, and
-    // passed — which is why this could only be reproduced in a linux/amd64
-    // container, never locally. A file-as-parent path is unwritable identically
-    // everywhere and removes the platform split.
+    // Not a /proc path: /proc only exists on Linux, and there `mkdirSync` on it
+    // does not fail fast, it BLOCKS THE EVENT LOOP. On the Linux CI runner that
+    // hangs the entire jest process forever: every suite reports PASS, then no
+    // summary and no exit, so the job never concludes and CI silently gates
+    // nothing (disrecord#13). macOS has no /proc and takes a different branch,
+    // so it reproduces only in a linux/amd64 container, never locally. A
+    // file-as-parent path is unwritable identically everywhere and removes the
+    // platform split.
     const filePath = join(dir, 'not-a-directory')
     await writeFile(filePath, 'x')
     process.env.OUTPUT_DIR = join(filePath, 'sub')

@@ -1,9 +1,7 @@
 # Deepgram tuning harness
 
 Replay a real recorded session against a matrix of Deepgram settings, and get
-numbers instead of guesses. Built for #12, prompted by #10 and by the
-`utteranceEndMs 1500 → 3000` change in `460980e` — which was reasoned from
-code rather than measured.
+numbers instead of guesses.
 
 ## Why not just stream the mp3 at Deepgram?
 

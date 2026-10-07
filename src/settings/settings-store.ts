@@ -79,7 +79,7 @@ import type { Logger } from '../logger.js'
  * a forgotten field is a missing feature, whereas an open spread is a leak.
  */
 export interface ChannelSettings {
-  /** Deepgram keyword boosts. An array — the CSV form was a textarea artifact. */
+  /** Deepgram keyword boosts, as an array (not a CSV string). */
   keywords?: string[]
   /** Deepgram nova-3 keyterms. Separate from `keywords`, as SessionPolicy already treats them. */
   keyterms?: string[]
@@ -460,10 +460,10 @@ export class FileSettingsStore implements SettingsStore {
    * Read-modify-write one world, serialized against every other mutation.
    *
    * ⚠️ Ids are validated here because the READ path discards non-snowflake
-   * keys (`parseSettingsFile`). Without this, a write with a malformed id
-   * succeeded, landed on disk, and then vanished on the next read — a silent
+   * keys (`parseSettingsFile`). Without this, a write with a malformed id would
+   * succeed, land on disk, and then vanish on the next read — a silent
    * write-then-lose. The routes validate too; this is what stops a direct
-   * caller reintroducing it.
+   * caller hitting it.
    */
   private mutate(guildId: string, apply: (world: GuildWorld) => void): Promise<void> {
     assertSnowflake(guildId, 'guildId')
@@ -475,9 +475,9 @@ export class FileSettingsStore implements SettingsStore {
       }
       apply(world)
       // Don't leave an empty shell behind. Without this, DELETE-ing a scene on
-      // an unconfigured guild CREATED that guild's world — so the resource the
-      // request removed from sprang into existence, and `GET /v1/worlds/:id`
-      // flipped from 404 to 200 by virtue of a delete.
+      // an unconfigured guild would CREATE that guild's world — the resource the
+      // request removed from would spring into existence, and `GET /v1/worlds/:id`
+      // would flip from 404 to 200 by virtue of a delete.
       if (isEmptyWorld(world)) delete file.worlds[guildId]
       else file.worlds[guildId] = world
       await this.write(file)
@@ -490,13 +490,13 @@ export class FileSettingsStore implements SettingsStore {
    */
   private enqueue(work: () => Promise<void>): Promise<void> {
     const run = this.tail.then(async () => {
-      // ⛔ The write lock is NOT checked here, deliberately. It used to be, and
-      // that was a data-loss bug: the flag is only armed by `read()`, which runs
-      // INSIDE work(), so on the first operation of a process the check passed,
-      // the read then armed the flag and returned an empty document, and the
-      // write happily renamed that emptiness over the corrupt file. The guard
-      // only worked from the second operation onward. It now lives in `write()`,
-      // which is the only place that can actually destroy anything.
+      // ⛔ The write lock is NOT checked here, deliberately: the flag is only
+      // armed by `read()`, which runs INSIDE work(), so on the first operation
+      // of a process a check here would pass, the read would then arm the flag
+      // and return an empty document, and the write would rename that emptiness
+      // over the corrupt file — a guard that works only from the second
+      // operation onward. It lives in `write()`, which is the only place that
+      // can actually destroy anything.
       await work()
     })
     // Keep the chain alive even if this write threw — one failure must not
@@ -543,10 +543,10 @@ export class FileSettingsStore implements SettingsStore {
    * Persist the document.
    *
    * ⛔ THIS is where the write lock is enforced — the only place that can
-   * actually destroy someone's configuration. Checking it any earlier is what
-   * produced the bug this replaced: the lock is armed by `read()`, so a check
-   * that ran before the read passed on the first operation of a process and let
-   * an empty document overwrite a corrupt file.
+   * actually destroy someone's configuration. Checking it any earlier fails
+   * open: the lock is armed by `read()`, so a check that runs before the read
+   * passes on the first operation of a process and lets an empty document
+   * overwrite a corrupt file.
    *
    * @param force explicit whole-document replace (import). See `replaceAll`.
    */

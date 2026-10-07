@@ -1,7 +1,6 @@
 /**
  * CoreServerClient — phone-home HTTP client for the CFG-hosted `serve` path.
  *
- * Supersedes `worker/core-server-client.ts` (the legacy SSE-worker path).
  * It carries three responsibilities, all CFG-hosted-only:
  *
  *   GET  /api/v1/recording/session-policy/:installationId
@@ -39,10 +38,9 @@ import type { Logger } from '../logger.js'
 
 /**
  * The per-session policy core serves at recording start: the consent set and
- * speaker names, ONLY. Keywords/keyterms were removed in Track A step 8 — the
- * worker reads Deepgram boosts from its own settings store
- * (`src/settings/settings-store.ts`), not from the platform. Re-adding
- * operational settings here would rebuild the round-trip step 8 cut.
+ * speaker names, ONLY. The worker reads Deepgram boosts from its own settings
+ * store (`src/settings/settings-store.ts`), not from the platform. Re-adding
+ * operational settings here would rebuild a round-trip that is cut on purpose.
  */
 export interface SessionPolicy {
   consentedUserIds: string[]
@@ -70,7 +68,7 @@ export interface BillingTickPayload {
   /**
    * Active (non-paused) minutes measured by the worker. The worker sends NO
    * rate — core prices the tick from the session's persisted size (billing
-   * is handled only in core projects). Requires cfg-core-server#305+.
+   * is handled only in core projects).
    */
   minutes: number
   label: string
@@ -241,12 +239,10 @@ export class CoreServerClient {
    * same boundary the billing split follows, where the worker meters and
    * core prices.
    *
-   * Why it exists: core's only participant rows for a worker-run session
-   * came from people *interacting* with a consent control, so anyone
-   * carrying a persistent channel opt-in was recorded while remaining
-   * invisible as a participant. `collectConsent` used to seed a row per
-   * member at start, but it has had no caller since recording moved into
-   * this worker.
+   * Why it exists: otherwise core's only participant rows for a worker-run
+   * session come from people *interacting* with a consent control, so anyone
+   * carrying a persistent channel opt-in is recorded while remaining
+   * invisible as a participant.
    *
    * Best-effort, like every other report here: a failure costs roster
    * completeness, never the recording in progress.
@@ -275,9 +271,9 @@ export class CoreServerClient {
    *
    * Sent on EVERY stop — including the ones core issued itself, which core
    * handles idempotently. The report that matters is the one for a stop core
-   * did not issue: before it existed, a human disconnecting the bot ended the
-   * worker cleanly and the platform never learned, so the session stayed
-   * "active" for days and the idle worker held the guild's recording slot
+   * did not issue: without it, a human disconnecting the bot ends the worker
+   * cleanly and the platform never learns, so the session stays "active" for
+   * days and the idle worker holds the guild's recording slot
    * (cfg-core-server#366).
    *
    * Best-effort, like every other report here, and time-bounded (see

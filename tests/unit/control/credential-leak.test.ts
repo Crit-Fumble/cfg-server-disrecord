@@ -37,9 +37,9 @@ const b64url = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64ur
 /**
  * The CFG-hosted bearer must be a DECODABLE JWT carrying the right scope and
  * installationId — `createControlAuthenticator` bytecompares it AND runs
- * `decodeJwt` on it (auth.ts). A plain string fails that, which is what made
- * the first version of this test authenticate on 2 routes out of 35 and scan
- * nothing but 401 bodies. The signature is never verified (the container holds
+ * `decodeJwt` on it (auth.ts). A plain string fails that, so the test would
+ * authenticate on almost no route and scan nothing but 401 bodies. The
+ * signature is never verified (the container holds
  * no AUTH_SECRET), so a hand-built token is enough.
  */
 const HOSTED_JWT = [
@@ -172,9 +172,9 @@ describe('⚠️ no route leaks a credential', () => {
       expect(routes.length).toBeGreaterThan(8)
 
       // ⚠️ The bearer must match the mode, or every /v1/ route answers 401 and
-      // the scan inspects nothing but error bodies. The first version of this
-      // test sent the control token in BOTH modes; CFG-hosted compares against
-      // `coreServerToken`, so its whole run was vacuous.
+      // the scan inspects nothing but error bodies: CFG-hosted compares against
+      // `coreServerToken`, so sending the control token in BOTH modes makes the
+      // hosted run vacuous.
       const bearer = cfg ? SENTINELS.coreServerToken : SENTINELS.controlToken
       let authorized = 0
 

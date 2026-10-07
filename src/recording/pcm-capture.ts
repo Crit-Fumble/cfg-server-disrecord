@@ -5,8 +5,7 @@
  * disk. Non-consenting speakers are silently skipped. After the session the
  * post-processor mixes all per-speaker files into a single MP3.
  *
- * Ported from cfg-core-server's `RecordingCapability` (~900 lines), split on
- * the way in to stay under the 800-line cap:
+ * Split to stay under the 800-line cap:
  *   - silence padding         → pcm-silence-pad.ts
  *   - late-joiner consent flow → ../consent/consent-manager.ts
  *

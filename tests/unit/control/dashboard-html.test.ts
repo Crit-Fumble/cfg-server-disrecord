@@ -54,11 +54,11 @@ describe('dashboard HTML', () => {
   it('never offers the voice channel as the recording thread’s parent', () => {
     // A recording is posted to a PRIVATE THREAD, and a thread's parent must be
     // a standard text channel — `createRecordingThread` rejects anything else
-    // and `deliver()` then refuses to post at all. The old
-    // "Same as voice channel" option was the DEFAULT selection, so the
-    // documented click-path (README: open the dashboard, pick a server and a
-    // voice channel, Start) recorded a full session and posted nothing to
-    // Discord. Nothing failed loudly; the mp3 just never appeared.
+    // and `deliver()` then refuses to post at all. A "Same as voice channel"
+    // option — worse, as the DEFAULT selection — makes the documented
+    // click-path (README: open the dashboard, pick a server and a voice
+    // channel, Start) record a full session and post nothing to Discord.
+    // Nothing fails loudly; the mp3 just never appears.
     expect(pageScript()).not.toContain('Same as voice channel')
   })
 

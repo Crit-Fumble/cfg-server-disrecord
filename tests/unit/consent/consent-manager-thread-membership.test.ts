@@ -3,13 +3,13 @@
  * recording thread because they are IN THE ROOM, not because they happened to
  * need a consent prompt.
  *
- * The bug this pins: adding-to-thread used to happen only as a side effect of
- * `tryPostToThread`, i.e. only for users who got prompted. `noteSpeaker`
+ * What this pins: adding-to-thread must not be only a side effect of
+ * `tryPostToThread`, i.e. only for users who get prompted. `noteSpeaker`
  * returns early for anyone already decided, and `ConsentSync.seedFromPolicy`
  * marks every holder of a persistent channel-level opt-in as consented at
  * session start. So the one population that is never prompted — the users who
- * opted in permanently — was also never added to the thread, and silently lost
- * access to the transcript and mp3 of a session they were recorded in.
+ * opted in permanently — would never be added to the thread, and would silently
+ * lose access to the transcript and mp3 of a session they were recorded in.
  */
 
 import { ConsentManager } from '../../../src/consent/consent-manager.js'

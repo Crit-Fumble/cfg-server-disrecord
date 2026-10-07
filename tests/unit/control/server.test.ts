@@ -56,16 +56,16 @@ describe('control server', () => {
       expect(res.json()).toMatchObject({ ok: true, botReady: true })
     })
 
-    // ⛔ REGRESSION: percent-encoding the prefix used to skip auth entirely.
+    // ⛔ REGRESSION GUARD: percent-encoding the prefix must not skip auth.
     //
     // Fastify decodes the path when ROUTING but leaves `req.url` as it arrived,
-    // so `GET /%76%31/recordings` reached the handler while a
-    // `req.url.startsWith('/v1/')` test said false. Every control route was
-    // callable with no credential — start a recording, stop someone else's,
+    // so `GET /%76%31/recordings` reaches the handler while a
+    // `req.url.startsWith('/v1/')` test says false — every control route
+    // callable with no credential: start a recording, stop someone else's,
     // read the settings document. Worst CFG-hosted, where the container binds
     // 0.0.0.0 and any neighbour on the docker network could reach it.
     //
-    // The hook now keys off `routeOptions.url`, the decoded matched pattern.
+    // The hook keys off `routeOptions.url`, the decoded matched pattern.
     it.each([
       ['/%76%31/recordings', 'percent-encoded v1'],
       ['/%76%31/settings/export', 'percent-encoded v1, settings'],
@@ -149,10 +149,9 @@ describe('control server', () => {
     })
 
     it('pause / resume / stop hit the service and return 204 / 204 / 200', async () => {
-      // Stop now blocks until runStop completes (mix + upload + Discord
+      // Stop blocks until runStop completes (mix + upload + Discord
       // post) so the container isn't killed mid-delivery; the endpoint
-      // returns 200 on full completion rather than the old fire-and-
-      // forget 202.
+      // returns 200 on full completion, never a fire-and-forget 202.
       const service = fakeService()
       app = await makeServer(service)
       expect((await app.inject({ method: 'POST', url: '/v1/recordings/r1/pause' })).statusCode).toBe(204)

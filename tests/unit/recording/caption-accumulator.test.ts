@@ -2,7 +2,7 @@
  * The session's transcript record stays bounded (#6).
  *
  * `captions[]` lives for the whole recording, so on a session running to the
- * 12hr ceiling it was the one structure that grew without any limit. These
+ * 12hr ceiling it is the one structure that would grow without any limit. These
  * specs pin the two things that bound it — word timings are not retained, and
  * a hard cap stops the array past a fail-safe ceiling — plus the invariant
  * that neither may corrupt the transcript the VTT is built from.

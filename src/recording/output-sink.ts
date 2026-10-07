@@ -49,7 +49,7 @@ export interface OutputSink {
 }
 
 /**
- * Local-directory sink (Phase 1). Copies the mp3 (and VTT) into
+ * Local-directory sink. Copies the mp3 (and VTT) into
  * `<outputDir>/<recordingId>/` so a self-host operator can grab them
  * straight off disk.
  */
@@ -90,9 +90,8 @@ export class LocalDirSink implements OutputSink {
  * Object-storage sink — CFG-hosted upload destination. Works against any
  * S3-compatible store (DO Spaces, OVH Object Storage, AWS S3, …).
  *
- * Ported from cfg-core-server's `services/recording/post-processor.ts`
- * upload block: same `@aws-sdk/lib-storage` `Upload` flow, same private ACL,
- * same `recordings/<id>/<id>.{mp3,vtt}` key layout. Selected by the session
+ * A `@aws-sdk/lib-storage` `Upload` flow with a private ACL and the
+ * `recordings/<id>/<id>.{mp3,vtt}` key layout. Selected by the session
  * controller when `DO_SPACES_*` env is present.
  *
  * The S3 client is constructed once per sink and reused across recordings.

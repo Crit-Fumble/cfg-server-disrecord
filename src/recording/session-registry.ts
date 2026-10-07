@@ -1,14 +1,15 @@
 /**
  * SessionRegistry — in-process registry of active recording sessions.
  *
- * Ported from cfg-core-server's `services/disrecord/session-store.ts`,
- * trimmed to what the standalone container needs: no container ids, no
- * host ports — the container IS the process, so a session is just a live
- * {@link SessionController} keyed by recordingId, with a guildId → recordingId
- * index that enforces Discord's one-voice-connection-per-bot-per-guild rule.
+ * The standalone counterpart of cfg-core-server's
+ * `services/disrecord/session-store.ts`, trimmed to what the container needs:
+ * no container ids, no host ports — the container IS the process, so a session
+ * is just a live {@link SessionController} keyed by recordingId, with a
+ * guildId → recordingId index that enforces Discord's
+ * one-voice-connection-per-bot-per-guild rule.
  *
- * Self-host: the lock is per-process and authoritative. (CFG-hosted Phase 2
- * keeps core-server's cross-container `session-store` as the global authority.)
+ * Self-host: the lock is per-process and authoritative. (CFG-hosted, core-server's
+ * cross-container `session-store` stays the global authority.)
  */
 
 import type { SessionController } from './session-controller.js'

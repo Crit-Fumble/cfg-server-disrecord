@@ -2,9 +2,9 @@
  * Optional second log destination: a file on the mounted output volume.
  *
  * Worker containers run with `AutoRemove`, so their logs die with the
- * container. That is why a lost wrap-up could not be diagnosed after the fact
- * (cfg-core-server#205) — by the time anyone looked, the only copy was gone.
- * Writing a second copy onto the already-bind-mounted output volume makes the
+ * container and a lost wrap-up cannot be diagnosed after the fact
+ * (cfg-core-server#205). Writing a second copy onto the already-bind-mounted
+ * output volume makes the
  * logs outlive the container without touching AutoRemove.
  *
  * Deliberately NOT in the container's temp dir: that is a size-capped tmpfs

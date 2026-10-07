@@ -1,7 +1,6 @@
 // tests/ is excluded from the emit build (it must never reach dist/ — this ships
-// as a production image), which also meant it was never typechecked: `typecheck`
-// covered src and tools/ only. This project is what covers the remaining 34
-// suites; `npm run typecheck` runs all three.
+// as a production image), so that project never typechecks it. This project
+// covers the test suites; `npm run typecheck` runs all three.
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
@@ -11,8 +10,8 @@
     // Tests import `@/deepgram/client` extensionless, which NodeNext rejects —
     // but tests never run under Node's ESM resolver. jest resolves them through
     // moduleNameMapper with @swc/jest, which is bundler-shaped, so this states
-    // how they are ACTUALLY resolved instead of forcing `.js` suffixes onto 34
-    // suites to satisfy a resolver that never sees them. src keeps NodeNext.
+    // how they are ACTUALLY resolved instead of forcing `.js` suffixes onto every
+    // suite to satisfy a resolver that never sees them. src keeps NodeNext.
     "moduleResolution": "bundler",
     "module": "ESNext",
     "types": ["jest", "node"]

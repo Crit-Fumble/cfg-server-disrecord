@@ -1,5 +1,4 @@
 #!/usr/bin/env sh
-# cfg-* convention: every push must pass tests locally. Memory:
-# feedback_no_failing_test_pushes — every cfg-* product repo gates pushes
-# via husky pre-push that runs `npm test`.
+# cfg-* convention: every push must pass tests locally — every cfg-* product
+# repo gates pushes via a husky pre-push that runs `npm test`.
 npm test

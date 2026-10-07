@@ -6,10 +6,9 @@
  *
  * The worker is *in* the voice channel, so channel membership is something it
  * observes directly. core-server's equivalent has to ask Discord over REST
- * with the right bot token, and that has already caused a production incident
- * (2026-06-23: a platform-token read 403'd, fail-closed to "empty", and
- * auto-paused a full, actively-recording channel). An observer that is already
- * in the room cannot get that wrong.
+ * with the right bot token, and a wrong-token read that 403s fails closed to
+ * "empty" and auto-pauses a full, actively-recording channel. An observer that
+ * is already in the room cannot get that wrong.
  *
  * ## Why the grace period
  *

@@ -13,15 +13,14 @@ name: release
 # secret contract for installing private @crit-fumble/* packages.
 #
 # ⚠️ `:latest` IS WHAT PRODUCTION SPAWNS (owner decision 2026-08-05). core-server
-# reads `disrecordWorkerImage` and calls dockerode `createContainer` with it —
-# an API that never pulls — so what this workflow publishes to `:latest` is
-# what the prod host runs the next time it pulls. That makes this workflow a
-# production gate, not just a build, which is why the `verify` job below exists:
-# nothing reaches `:latest` without a version match, a main ancestry check, and
-# a green CI run for the exact commit being released.
+# reads `disrecordWorkerImage` and pulls it before every spawn (`imagePull:
+# 'always'`), so what this workflow publishes to `:latest` is what the next
+# recording session runs. That makes this workflow a production gate, not just a
+# build, which is why the `verify` job below exists: nothing reaches `:latest`
+# without a version match, a main ancestry check, and a green CI run for the
+# exact commit being released.
 #
-# See docs/releasing.md for the full contract, including the pull step that
-# tagging alone does NOT perform.
+# See docs/releasing.md for the full contract.
 
 on:
   push:
@@ -52,9 +51,8 @@ jobs:
           # Same ref the build job checks out, so the CI gate below asks about the commit being built (dt#670).
           ref: ${{ inputs.tag || github.ref }}
 
-      # Kills the drift that let package.json sit at 0.2.8 while tags reached
-      # v0.2.21 — at which point `npm version patch` proposes v0.2.9, a tag that
-      # already exists and is twelve releases stale.
+      # A package.json behind the tags makes `npm version patch` propose a tag
+      # that already exists.
       - name: Tag matches package.json version
         if: github.event_name == 'push'
         run: |
@@ -83,11 +81,10 @@ jobs:
       #
       # ⚠️ IT MUST WAIT, not just look. The promotion push to `main` and the tag
       # push land within seconds of each other, so this job routinely starts
-      # BEFORE CI has registered a check-run for the commit. The first version
-      # of this step read the API once and treated "not reported yet" as
-      # "untested" — which failed the v0.2.22 release against a commit whose
-      # CI then passed twice. Same trap dev-tools' promote.sh documents:
-      # "queued" and "expected" both mean wait, and neither says how long.
+      # BEFORE CI has registered a check-run for the commit. Reading the API once
+      # and treating "not reported yet" as "untested" fails a release whose CI
+      # is merely late. Same trap dev-tools' promote.sh documents: "queued" and
+      # "expected" both mean wait, and neither says how long.
       #
       # `conclusion` is null while a run is queued or in progress, so absence
       # and in-flight are the same signal here: keep waiting. Only a RESOLVED
