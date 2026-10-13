@@ -68,6 +68,7 @@ import { processRecording } from './post-process.js'
 import { ChunkRecorder, type ChunkInfo } from './chunk-recorder.js'
 import { createRecordingThread, postChunk, postRecording, tempDirOf } from '../discord/thread-poster.js'
 import { SpeakerWebhookManager } from '../discord/speaker-webhook.js'
+import { DEFAULT_DISCORD_WEB_BASE, messageLink } from '../discord/endpoints.js'
 import { ConsentSync } from '../phone-home/consent-sync.js'
 import { CaptionAccumulator } from './caption-accumulator.js'
 import type { CoreServerClient, RecordingEndReason } from '../phone-home/core-client.js'
@@ -177,6 +178,8 @@ export interface SessionControllerParams {
   voiceChannelId: string
   /** Text channel for the thread + consent prompt. Defaults to voice channel. */
   textChannelId: string
+  /** Base of the message links posted in the thread. Absent ⇒ Discord's own. */
+  discordWebBase?: string
   /** Whether live transcription is enabled. */
   transcription: boolean
   /**
@@ -1546,7 +1549,7 @@ export class SessionController {
       try {
         const channel = await p.client.channels.fetch(this.threadId)
         if (channel && channel.isSendable()) {
-          const url = `https://discord.com/channels/${p.guildId}/${this.threadId}/${this.firstThreadMessageId}`
+          const url = messageLink(p.discordWebBase ?? DEFAULT_DISCORD_WEB_BASE, p.guildId, this.threadId, this.firstThreadMessageId)
           await channel.send({ content: `# [Back to Top](${url})` })
         }
       } catch (err) {

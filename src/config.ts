@@ -10,6 +10,8 @@
  * container; CFG-hosted per-session JWTs die with the container.
  */
 
+import { DEFAULT_DISCORD_API_BASE, DEFAULT_DISCORD_WEB_BASE, type DiscordEndpoints } from './discord/endpoints.js'
+
 function requireEnv(name: string): string {
   const v = process.env[name]
   if (!v) throw new Error(`Missing required env var: ${name}`)
@@ -18,6 +20,26 @@ function requireEnv(name: string): string {
 
 function optionalEnv(name: string, fallback: string): string {
   return process.env[name] ?? fallback
+}
+
+/**
+ * An optional URL from the environment, without its trailing slash. A value
+ * that is not a URL with one of `schemes` fails loudly at boot: a typo here
+ * would otherwise surface as a login that hangs. The value is never echoed,
+ * because a URL can carry credentials.
+ */
+function optionalUrlEnv(name: string, schemes: string[]): string | undefined {
+  const raw = process.env[name]
+  if (!raw) return undefined
+  const expected = schemes.map((s) => `${s}//`).join(' or ')
+  let protocol: string
+  try {
+    protocol = new URL(raw).protocol
+  } catch {
+    throw new Error(`Invalid ${name}: expected a ${expected} URL`)
+  }
+  if (!schemes.includes(protocol)) throw new Error(`Invalid ${name}: expected a ${expected} URL`)
+  return raw.replace(/\/+$/, '')
 }
 
 /**
@@ -38,6 +60,12 @@ export interface StandaloneConfig {
    * ReSesh bot's token. Used only to join voice (no command surface).
    */
   discordToken: string
+  /**
+   * Where the REST API, the gateway and posted links point. Discord itself
+   * unless `DISRECORD_DISCORD_API_BASE`, `DISRECORD_DISCORD_GATEWAY_URL` or
+   * `DISRECORD_DISCORD_WEB_BASE` say otherwise (see `discord/endpoints.ts`).
+   */
+  discord: DiscordEndpoints
   /**
    * Deepgram API key. Absent ⇒ record-only mode: the container still
    * captures + mixes mp3, it just doesn't transcribe (no VTT, no thread
@@ -286,6 +314,11 @@ export function resolveStandaloneConfig(): StandaloneConfig {
 
   return {
     discordToken: requireEnv('DISRECORD_DISCORD_TOKEN'),
+    discord: {
+      apiBase: optionalUrlEnv('DISRECORD_DISCORD_API_BASE', ['http:', 'https:']) ?? DEFAULT_DISCORD_API_BASE,
+      gatewayUrl: optionalUrlEnv('DISRECORD_DISCORD_GATEWAY_URL', ['ws:', 'wss:']),
+      webBase: optionalUrlEnv('DISRECORD_DISCORD_WEB_BASE', ['http:', 'https:']) ?? DEFAULT_DISCORD_WEB_BASE,
+    },
     deepgramKey,
     deepgramMode,
     deepgramModel: optionalEnv('DEEPGRAM_MODEL', 'nova-3'),

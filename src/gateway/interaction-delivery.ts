@@ -36,6 +36,7 @@
  * even if it wanted to. This check is therefore self-host only.
  */
 
+import { DEFAULT_DISCORD_API_BASE } from '../discord/endpoints.js'
 import type { Logger } from '../logger.js'
 
 export interface InteractionDelivery {
@@ -52,13 +53,16 @@ export interface InteractionDelivery {
  * knowing must never stop a recording. Verified empirically that
  * `GET /applications/@me` answers a BOT token and carries
  * `interactions_endpoint_url`.
+ *
+ * `apiBase` is the REST base the gateway client uses too (`discord/endpoints.ts`).
  */
 export async function fetchInteractionDelivery(
   botToken: string,
   logger: Logger,
+  apiBase: string = DEFAULT_DISCORD_API_BASE,
 ): Promise<InteractionDelivery> {
   try {
-    const res = await fetch('https://discord.com/api/v10/applications/@me', {
+    const res = await fetch(`${apiBase}/v10/applications/@me`, {
       headers: { authorization: `Bot ${botToken}` },
     })
     if (!res.ok) {
