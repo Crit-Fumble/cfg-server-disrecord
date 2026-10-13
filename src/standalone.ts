@@ -61,7 +61,7 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
   // ── 1. Discord gateway — log in at boot, stay connected. The login is
   // required for voice: joinVoiceChannel needs `guild.voiceAdapterCreator`,
   // which only exists on a connected client.
-  const client = await startGateway(config.discordToken, rootLogger.child({ module: 'gateway' }))
+  const client = await startGateway(config.discordToken, rootLogger.child({ module: 'gateway' }), config.discord)
 
   // ── 2. RecordingService — sink picked by mode.
   // CFG-hosted with object-storage creds ⇒ upload; otherwise local dir.
@@ -81,7 +81,7 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
   // axis the container cannot infer from its own config. Self-host only: in
   // CFG-hosted the endpoint URL is correct and belongs to core-server.
   if (!cfgHosted) {
-    const delivery = await fetchInteractionDelivery(config.discordToken, logger)
+    const delivery = await fetchInteractionDelivery(config.discordToken, logger, config.discord.apiBase)
     warnIfButtonsCannotFire(delivery, logger)
     interactionDelivery = delivery
   }

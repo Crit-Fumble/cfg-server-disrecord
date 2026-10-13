@@ -16,7 +16,8 @@
  * privileged intents must be toggled on in the bot's Developer Portal.
  */
 
-import { Client, GatewayIntentBits } from 'discord.js'
+import { Client, GatewayIntentBits, Routes } from 'discord.js'
+import type { DiscordEndpoints } from '../discord/endpoints.js'
 import type { Logger } from '../logger.js'
 
 const READY_TIMEOUT_MS = 30_000
@@ -27,8 +28,15 @@ const READY_TIMEOUT_MS = 30_000
  * Resolves once `guilds.cache` is populated so the first voice-join
  * attempt doesn't race the gateway handshake. Rejects if login fails or
  * ready never fires within {@link READY_TIMEOUT_MS}.
+ *
+ * `endpoints` moves the REST base and the gateway address off Discord's own
+ * (`discord/endpoints.ts`). Left out, the client talks to Discord.
  */
-export async function startGateway(token: string, logger: Logger): Promise<Client> {
+export async function startGateway(
+  token: string,
+  logger: Logger,
+  endpoints?: Pick<DiscordEndpoints, 'apiBase' | 'gatewayUrl'>,
+): Promise<Client> {
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -37,7 +45,9 @@ export async function startGateway(token: string, logger: Logger): Promise<Clien
       GatewayIntentBits.GuildMessages,
       GatewayIntentBits.MessageContent,
     ],
+    ...(endpoints ? { rest: { api: endpoints.apiBase } } : {}),
   })
+  if (endpoints?.gatewayUrl) pinGatewayUrl(client, endpoints.gatewayUrl)
 
   client.on('error', (err) => {
     logger.error({ err: err.message }, 'discord client error')
@@ -87,6 +97,29 @@ export async function startGateway(token: string, logger: Logger): Promise<Clien
   })
 
   return client
+}
+
+/**
+ * Make the client dial `gatewayUrl` instead of the address the API hands out.
+ *
+ * discord.js has no option for this: it connects to whatever
+ * `GET /gateway/bot` answers. That answer is the server's PUBLIC address, and
+ * a container next to a self-hosted server often cannot reach it (it names
+ * `localhost`, or sits behind a proxy that wants a browser session). So the
+ * one field is replaced on the way through, and the rest of the answer
+ * (shard count, session limits) is kept.
+ *
+ * ⚠️ A RESUME is not covered. After a dropped connection discord.js resumes
+ * at the `resume_gateway_url` the server sent in READY, which this does not
+ * touch.
+ */
+export function pinGatewayUrl(client: Pick<Client, 'rest'>, gatewayUrl: string): void {
+  const get = client.rest.get.bind(client.rest)
+  client.rest.get = (async (route, options) => {
+    const answer = await get(route, options)
+    if (route !== Routes.gatewayBot() || !answer || typeof answer !== 'object') return answer
+    return { ...answer, url: gatewayUrl }
+  }) as typeof client.rest.get
 }
 
 /**

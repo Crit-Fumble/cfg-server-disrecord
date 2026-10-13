@@ -61,6 +61,7 @@ function service() {
     keepPcm: false,
     outputDir: '/tmp',
     consentStorePath: '/tmp/consent.json',
+    discord: { apiBase: 'https://discord.com/api', webBase: 'https://discord.com' },
     cfg: undefined,
   } as never
   return new RecordingService(client, {} as never, config, silentLogger, testSettingsStore())

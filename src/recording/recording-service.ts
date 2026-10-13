@@ -132,6 +132,7 @@ export class RecordingService {
       guildId: req.guildId,
       voiceChannelId: req.voiceChannelId,
       textChannelId,
+      discordWebBase: this.config.discord.webBase,
       transcription,
       deepgramMode: this.config.deepgramMode,
       deepgramKey: this.config.deepgramKey ?? null,
