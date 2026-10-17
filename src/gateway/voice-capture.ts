@@ -28,6 +28,7 @@ import type { RecordingSession } from '../recording/recording-session.js'
 import type { PcmCapture } from '../recording/pcm-capture.js'
 import type { ConsentManager } from '../consent/consent-manager.js'
 import { recoverVoiceConnection } from './voice-reconnect.js'
+import { isVoiceChannelType } from '../discord/voice-channel.js'
 
 /** 48 kHz mono — what Deepgram + PcmCapture both expect. */
 const PCM_SAMPLE_RATE = 48_000
@@ -185,7 +186,7 @@ export class VoiceCapture {
     const channel = await guild.channels.fetch(voiceChannelId).catch((err) => {
       throw new VoiceJoinError(`Cannot fetch channel ${voiceChannelId}`, err)
     })
-    if (!channel || !channel.isVoiceBased()) {
+    if (!isVoiceChannelType(channel)) {
       throw new VoiceJoinError(`Channel ${voiceChannelId} is not a voice channel`)
     }
 
@@ -302,7 +303,7 @@ export class VoiceCapture {
    */
   currentOccupancy(): string[] {
     const channel = this.params.client.channels.cache.get(this.params.voiceChannelId)
-    if (!channel || !channel.isVoiceBased()) return []
+    if (!isVoiceChannelType(channel)) return []
     return humanMemberIds(channel.members)
   }
 
@@ -311,7 +312,7 @@ export class VoiceCapture {
     const channel = this.params.client.channels.cache.get(this.params.voiceChannelId)
     // A missing cache entry is "unknown", never "empty" — reporting [] here
     // would start the empty-channel clock on a cache miss.
-    if (!channel || !channel.isVoiceBased()) return
+    if (!isVoiceChannelType(channel)) return
     this.params.onOccupancyChanged(humanMemberIds(channel.members))
   }
 

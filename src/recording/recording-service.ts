@@ -16,6 +16,7 @@ import { SessionRegistry, GuildConflictError, SessionNotFoundError } from './ses
 import { CoreServerClient } from '../phone-home/core-client.js'
 import type { SettingsStore } from '../settings/settings-store.js'
 import type { InteractionDelivery } from '../gateway/interaction-delivery.js'
+import { isVoiceChannelType } from '../discord/voice-channel.js'
 import type { Client } from 'discord.js'
 import type { OutputSink } from './output-sink.js'
 import type { StandaloneConfig } from '../config.js'
@@ -269,7 +270,7 @@ export class RecordingService {
       const textChannels: Array<{ id: string; name: string }> = []
       for (const channel of guild.channels.cache.values()) {
         const entry = { id: channel.id, name: channel.name }
-        if (channel.isVoiceBased()) voiceChannels.push(entry)
+        if (isVoiceChannelType(channel)) voiceChannels.push(entry)
         else if (channel.isTextBased()) textChannels.push(entry)
       }
       return {

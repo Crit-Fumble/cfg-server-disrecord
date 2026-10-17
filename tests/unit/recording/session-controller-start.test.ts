@@ -88,6 +88,7 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
 import { tmpdir } from 'node:os'
 import { testSettingsStore } from '../../_lib/settings.js'
 import { join } from 'node:path'
+import { ChannelType } from 'discord.js'
 import { SessionController, type SessionControllerParams } from '../../../src/recording/session-controller.js'
 import { ConsentManager } from '../../../src/consent/consent-manager.js'
 import type { CoreServerClient } from '../../../src/phone-home/core-client.js'
@@ -108,13 +109,14 @@ function fakeClient(voiceMemberIds: string[]) {
     user: { id: 'bot-self' },
     channels: {
       fetch: jest.fn(async (id: string) => {
-        // voiceChannelId lookup → a voice-based channel with members.
+        // voiceChannelId lookup → a voice channel with members. Known by its
+        // type alone: no `bitrate`, the way a Spacebar instance sends one.
         if (id === 'vc-1') {
           const members = new Map<string, unknown>()
           for (const m of voiceMemberIds) members.set(m, {})
           members.set('bot-self', {})
           return {
-            isVoiceBased: () => true,
+            type: ChannelType.GuildVoice,
             name: 'Table 1',
             members,
           }
@@ -262,6 +264,26 @@ describe('SessionController.start() — issue #5 (revised)', () => {
 
     const [, , , memberArg] = postSessionStartSpy.mock.calls[0]
     expect(memberArg).toEqual(expect.arrayContaining(['u-speaker', 'u-listener']))
+
+    postSessionStartSpy.mockRestore()
+  })
+
+  it('reads the voice members off a voice channel that has no bitrate (dt#737)', async () => {
+    // discord.js's isVoiceBased() is `'bitrate' in channel`, and a Spacebar
+    // voice channel has no bitrate: read that way, the channel had no members
+    // to add to the thread or mention in the announcement.
+    const postSessionStartSpy = jest
+      .spyOn(ConsentManager.prototype, 'postSessionStart')
+      .mockResolvedValue('start-msg-1')
+    const client = fakeClient(['u-speaker', 'u-listener'])
+    const fetchChannel = (client as unknown as { channels: { fetch: (id: string) => Promise<object> } }).channels.fetch
+
+    const controller = new SessionController(baseParams({ client, invokerUserId: undefined }))
+    await controller.start()
+
+    expect('bitrate' in (await fetchChannel('vc-1'))).toBe(false)
+    const [, , , memberArg] = postSessionStartSpy.mock.calls[0]
+    expect(memberArg).toEqual(['u-speaker', 'u-listener'])
 
     postSessionStartSpy.mockRestore()
   })

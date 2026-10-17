@@ -69,6 +69,7 @@ import { ChunkRecorder, type ChunkInfo } from './chunk-recorder.js'
 import { createRecordingThread, postChunk, postRecording, tempDirOf } from '../discord/thread-poster.js'
 import { SpeakerWebhookManager } from '../discord/speaker-webhook.js'
 import { DEFAULT_DISCORD_WEB_BASE, messageLink } from '../discord/endpoints.js'
+import { isVoiceChannelType } from '../discord/voice-channel.js'
 import { ConsentSync } from '../phone-home/consent-sync.js'
 import { CaptionAccumulator } from './caption-accumulator.js'
 import type { CoreServerClient, RecordingEndReason } from '../phone-home/core-client.js'
@@ -1379,7 +1380,7 @@ export class SessionController {
   private async humanVoiceMemberIds(client: Client): Promise<string[]> {
     try {
       const channel = await client.channels.fetch(this.voiceChannelId)
-      if (channel && channel.isVoiceBased()) {
+      if (isVoiceChannelType(channel)) {
         return humanMemberIds(channel.members).filter((id) => id !== client.user?.id)
       }
     } catch {
@@ -1914,7 +1915,7 @@ export class SessionController {
   private async voiceMemberIds(client: Client): Promise<string[]> {
     try {
       const channel = await client.channels.fetch(this.voiceChannelId)
-      if (channel && channel.isVoiceBased()) {
+      if (isVoiceChannelType(channel)) {
         return Array.from(channel.members.keys()).filter((id) => id !== client.user?.id)
       }
     } catch {

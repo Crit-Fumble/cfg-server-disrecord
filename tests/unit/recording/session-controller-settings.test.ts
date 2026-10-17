@@ -55,6 +55,7 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ChannelType } from 'discord.js'
 import { SessionController, type SessionControllerParams } from '../../../src/recording/session-controller.js'
 import { FileSettingsStore } from '../../../src/settings/settings-store.js'
 import type { CoreServerClient } from '../../../src/phone-home/core-client.js'
@@ -71,7 +72,7 @@ function fakeClient() {
     user: { id: 'bot-self' },
     channels: {
       fetch: jest.fn(async (id: string) =>
-        id === CHANNEL ? { isVoiceBased: () => true, name: 'Table 1', members: new Map() } : null,
+        id === CHANNEL ? { type: ChannelType.GuildVoice, name: 'Table 1', members: new Map() } : null,
       ),
     },
   } as never
