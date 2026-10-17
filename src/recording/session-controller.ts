@@ -500,13 +500,9 @@ export class SessionController {
     }
     // Once per start, before the voice join, so a start that fails there still
     // says what it read. Counts only: keywords and keyterms hold player names.
+    const { keywords, keyterms, threadNameTemplate } = channelSettings
     this.logger.info(
-      {
-        guildId: p.guildId,
-        keywords: channelSettings.keywords?.length ?? 0,
-        keyterms: channelSettings.keyterms?.length ?? 0,
-        threadNameTemplate: Boolean(channelSettings.threadNameTemplate),
-      },
+      { guildId: p.guildId, keywords: keywords?.length ?? 0, keyterms: keyterms?.length ?? 0, threadNameTemplate: Boolean(threadNameTemplate) },
       'channel settings resolved',
     )
 

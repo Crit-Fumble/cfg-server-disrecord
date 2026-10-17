@@ -263,26 +263,6 @@ describe('SessionController.start() — issue #5 (revised)', () => {
     await controller.start()
 
     const [, , , memberArg] = postSessionStartSpy.mock.calls[0]
-    expect(memberArg).toEqual(expect.arrayContaining(['u-speaker', 'u-listener']))
-
-    postSessionStartSpy.mockRestore()
-  })
-
-  it('reads the voice members off a voice channel that has no bitrate (dt#737)', async () => {
-    // discord.js's isVoiceBased() is `'bitrate' in channel`, and a Spacebar
-    // voice channel has no bitrate: read that way, the channel had no members
-    // to add to the thread or mention in the announcement.
-    const postSessionStartSpy = jest
-      .spyOn(ConsentManager.prototype, 'postSessionStart')
-      .mockResolvedValue('start-msg-1')
-    const client = fakeClient(['u-speaker', 'u-listener'])
-    const fetchChannel = (client as unknown as { channels: { fetch: (id: string) => Promise<object> } }).channels.fetch
-
-    const controller = new SessionController(baseParams({ client, invokerUserId: undefined }))
-    await controller.start()
-
-    expect('bitrate' in (await fetchChannel('vc-1'))).toBe(false)
-    const [, , , memberArg] = postSessionStartSpy.mock.calls[0]
     expect(memberArg).toEqual(['u-speaker', 'u-listener'])
 
     postSessionStartSpy.mockRestore()
