@@ -205,6 +205,39 @@ describe('SessionController — the container’s own settings', () => {
   })
 })
 
+describe('SessionController — the "channel settings resolved" line', () => {
+  const info = (silentLogger as unknown as { info: jest.Mock }).info
+  const resolvedLines = () =>
+    info.mock.calls.filter(([, msg]) => msg === 'channel settings resolved').map(([fields]) => fields)
+
+  it('counts what the channel set and logs none of the values (they hold player names)', async () => {
+    await store.setScene(GUILD, CHANNEL, {
+      keywords: ['Keawe', 'Mumbley'],
+      keyterms: ['Tarrasque'],
+      threadNameTemplate: '{{voiceChannel}} log',
+    })
+    await start()
+    expect(resolvedLines()).toEqual([{ guildId: GUILD, keywords: 2, keyterms: 1, threadNameTemplate: true }])
+  })
+
+  it('logs zeros when the settings file does not exist', async () => {
+    // beforeEach's store points into a fresh temp dir that nothing has written.
+    await expect(readFile(join(dir, 'worlds.json'), 'utf-8')).rejects.toThrow()
+    await start()
+    expect(resolvedLines()).toEqual([{ guildId: GUILD, keywords: 0, keyterms: 0, threadNameTemplate: false }])
+  })
+
+  it('is logged before the voice join, so a start that fails there still says what it read', async () => {
+    mockVoiceJoin.mockImplementationOnce(async () => {
+      throw new Error('Voice connection never reached Ready')
+    })
+    await expect(start()).rejects.toThrow('never reached Ready')
+    expect(resolvedLines()).toHaveLength(1)
+    const lineAt = info.mock.invocationCallOrder[info.mock.calls.findIndex(([, msg]) => msg === 'channel settings resolved')]
+    expect(lineAt).toBeLessThan(mockVoiceJoin.mock.invocationCallOrder[0])
+  })
+})
+
 describe('SessionController.pushConsent — the control-API path', () => {
   it('persists a remembered decision all the way to disk', async () => {
     // ⚠️ This drives the WIRING, not the manager. A direct

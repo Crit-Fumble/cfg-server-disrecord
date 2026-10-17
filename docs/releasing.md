@@ -45,22 +45,25 @@ npm version --no-git-tag-version patch    # or minor / major
 `--no-git-tag-version` matters: plain `npm version` commits and tags for you,
 which is the trap above.
 
-Before promoting, run the live recording specs from `cfg-core-dev-tools`. Set
-`DISRECORD_DISCORD_TOKEN` and the `DISCORD_TEST_*` ids in its `.env.test`, run
-`npm run test:up`, then:
+Before promoting, run the recorder launch spec from `cfg-core-dev-tools`
+against its local e2e stack (`npm run test:up`). It needs no Discord token:
 
 ```sh
 cd dev/e2e-tests
 node scripts/_disrecord-fixture-image.mjs --rebuild   # a stale image only warns
-E2E_DOCKER=true npx playwright test --project=api tests/resesh/
+E2E_DOCKER=true npx playwright test --project=api tests/resesh/recorder-launch-spacebar.api.spec.ts
 ```
 
-The specs build `cfg-server-disrecord:test` from dev-tools'
+The stack runs `cfg-server-disrecord:test`, built from dev-tools'
 `workspaces/cfg-server-disrecord` checkout only when that image is absent, which
-is why the rebuild comes first. These specs are the only automated check that a
-real recording runs and applies its settings file. They skip in cloud-e2e (no
-bot token), and prod acceptance never starts a recording, yet a published
-`:latest` reaches every user's next recording.
+is why the rebuild comes first. The spec starts a recording through core-server,
+and the worker it launches logs in to the stack's Spacebar instance instead of
+Discord. It checks the launch from outside: the bot logged in, the worker read
+the settings file core-server mounted for it, and the container's user, mounts
+and environment are the ones core-server chose. The start then fails at the
+voice join, because Spacebar's voice gateway refuses the protocol the recorder
+speaks. So the spec proves the launch and nothing after it: capture, mix and
+upload are step 5.
 
 **2. Promote `next` → `main`** by fast-forward. Never a merge button — squash,
 merge commit and rebase-merge all leave the branches permanently unrelated.
@@ -98,8 +101,16 @@ gh api /orgs/Crit-Fumble/packages/container/cfg-server-disrecord/versions \
   --jq '.[0].metadata.container.tags'
 ```
 
-There is **no** step 5. Do not `docker pull` on the prod host — `imagePull:
-'always'` means the next recording pulls it.
+Do not `docker pull` on the prod host — `imagePull: 'always'` means the next
+recording pulls it.
+
+**5. Record a minute on Discord by hand.** No automated test touches real
+Discord, and prod acceptance never starts a recording, yet a published
+`:latest` reaches every user's next recording. So once `:latest` carries the new
+version, the owner makes one: start a recording from Server Manager in a test
+voice channel, say a few words, and stop it after about a minute. It passes
+when the bot joins, the thread appears, the mp3 lands in it, and the "Back to
+Top" link at the end of the thread opens its first message.
 
 ## What the workflow refuses to publish
 

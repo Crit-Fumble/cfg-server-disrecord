@@ -498,6 +498,17 @@ export class SessionController {
       // platform (or env) supplies, which is exactly the pre-settings behaviour.
       this.logger.warn({ err }, 'settings lookup failed — falling back to session policy / env defaults')
     }
+    // Once per start, before the voice join, so a start that fails there still
+    // says what it read. Counts only: keywords and keyterms hold player names.
+    this.logger.info(
+      {
+        guildId: p.guildId,
+        keywords: channelSettings.keywords?.length ?? 0,
+        keyterms: channelSettings.keyterms?.length ?? 0,
+        threadNameTemplate: Boolean(channelSettings.threadNameTemplate),
+      },
+      'channel settings resolved',
+    )
 
     // ── CFG-hosted: pre-fetch the session policy ────────────────────────────
     // The seeded consent list only — auto-consent for the invoker plus anyone

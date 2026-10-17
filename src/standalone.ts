@@ -45,6 +45,11 @@ export async function startStandalone(config: StandaloneConfig): Promise<void> {
       deepgramMode: config.deepgramMode,
       mode: cfgHosted ? 'cfg-hosted' : 'self-host',
       objectStorageUpload: config.cfg?.objectStorage != null,
+      settingsPath: config.settingsPath,
+      // Where "Discord" is, by host alone: a URL can carry a user and password,
+      // and a log line is no place for either.
+      discordApiHost: new URL(config.discord.apiBase).host,
+      discordGatewayHost: config.discord.gatewayUrl ? new URL(config.discord.gatewayUrl).host : null,
     },
     'starting cfg-server-disrecord in serve mode',
   )

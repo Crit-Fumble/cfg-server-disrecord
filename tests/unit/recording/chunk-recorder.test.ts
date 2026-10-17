@@ -5,7 +5,7 @@
  * mapping a wall-clock window [startByte, endByte) of a speaker's silence-padded,
  * rotation-split PCM stream to per-file read slices. If this drifts, chunks
  * desync or duplicate/skip audio. These tests pin it; the mix + upload are
- * exercised against the live-record harness (out of unit scope).
+ * checked by hand on Discord after a release (docs/releasing.md, step 5).
  */
 
 import { planWindowReads, evenFloor, type FileSpan } from '../../../src/recording/chunk-recorder.js'
