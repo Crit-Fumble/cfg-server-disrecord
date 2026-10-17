@@ -88,6 +88,7 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
 import { tmpdir } from 'node:os'
 import { testSettingsStore } from '../../_lib/settings.js'
 import { join } from 'node:path'
+import { ChannelType } from 'discord.js'
 import { SessionController, type SessionControllerParams } from '../../../src/recording/session-controller.js'
 import { ConsentManager } from '../../../src/consent/consent-manager.js'
 import type { CoreServerClient } from '../../../src/phone-home/core-client.js'
@@ -108,13 +109,14 @@ function fakeClient(voiceMemberIds: string[]) {
     user: { id: 'bot-self' },
     channels: {
       fetch: jest.fn(async (id: string) => {
-        // voiceChannelId lookup → a voice-based channel with members.
+        // voiceChannelId lookup → a voice channel with members. Known by its
+        // type alone: no `bitrate`, the way a Spacebar instance sends one.
         if (id === 'vc-1') {
           const members = new Map<string, unknown>()
           for (const m of voiceMemberIds) members.set(m, {})
           members.set('bot-self', {})
           return {
-            isVoiceBased: () => true,
+            type: ChannelType.GuildVoice,
             name: 'Table 1',
             members,
           }
@@ -261,7 +263,7 @@ describe('SessionController.start() — issue #5 (revised)', () => {
     await controller.start()
 
     const [, , , memberArg] = postSessionStartSpy.mock.calls[0]
-    expect(memberArg).toEqual(expect.arrayContaining(['u-speaker', 'u-listener']))
+    expect(memberArg).toEqual(['u-speaker', 'u-listener'])
 
     postSessionStartSpy.mockRestore()
   })

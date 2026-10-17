@@ -55,6 +55,7 @@ jest.mock('../../../src/discord/thread-poster.js', () => ({
 import { mkdtemp, rm, readFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ChannelType } from 'discord.js'
 import { SessionController, type SessionControllerParams } from '../../../src/recording/session-controller.js'
 import { FileSettingsStore } from '../../../src/settings/settings-store.js'
 import type { CoreServerClient } from '../../../src/phone-home/core-client.js'
@@ -71,7 +72,7 @@ function fakeClient() {
     user: { id: 'bot-self' },
     channels: {
       fetch: jest.fn(async (id: string) =>
-        id === CHANNEL ? { isVoiceBased: () => true, name: 'Table 1', members: new Map() } : null,
+        id === CHANNEL ? { type: ChannelType.GuildVoice, name: 'Table 1', members: new Map() } : null,
       ),
     },
   } as never
@@ -201,6 +202,39 @@ describe('SessionController — the container’s own settings', () => {
     // policy-keyword fallback.
     expect(mockRecordingSession).toHaveBeenCalledTimes(1)
     expect(builtWith().keywords).toBeUndefined()
+  })
+})
+
+describe('SessionController — the "channel settings resolved" line', () => {
+  const info = (silentLogger as unknown as { info: jest.Mock }).info
+  const resolvedLines = () =>
+    info.mock.calls.filter(([, msg]) => msg === 'channel settings resolved').map(([fields]) => fields)
+
+  it('counts what the channel set and logs none of the values (they hold player names)', async () => {
+    await store.setScene(GUILD, CHANNEL, {
+      keywords: ['Keawe', 'Mumbley'],
+      keyterms: ['Tarrasque'],
+      threadNameTemplate: '{{voiceChannel}} log',
+    })
+    await start()
+    expect(resolvedLines()).toEqual([{ guildId: GUILD, keywords: 2, keyterms: 1, threadNameTemplate: true }])
+  })
+
+  it('logs zeros when the settings file does not exist', async () => {
+    // beforeEach's store points into a fresh temp dir that nothing has written.
+    await expect(readFile(join(dir, 'worlds.json'), 'utf-8')).rejects.toThrow()
+    await start()
+    expect(resolvedLines()).toEqual([{ guildId: GUILD, keywords: 0, keyterms: 0, threadNameTemplate: false }])
+  })
+
+  it('is logged before the voice join, so a start that fails there still says what it read', async () => {
+    mockVoiceJoin.mockImplementationOnce(async () => {
+      throw new Error('Voice connection never reached Ready')
+    })
+    await expect(start()).rejects.toThrow('never reached Ready')
+    expect(resolvedLines()).toHaveLength(1)
+    const lineAt = info.mock.invocationCallOrder[info.mock.calls.findIndex(([, msg]) => msg === 'channel settings resolved')]
+    expect(lineAt).toBeLessThan(mockVoiceJoin.mock.invocationCallOrder[0])
   })
 })
 

@@ -88,6 +88,7 @@ jest.mock('../../../src/recording/post-process.js', () => ({
 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { ChannelType } from 'discord.js'
 import { testSettingsStore } from '../../_lib/settings.js'
 import { SessionController, type SessionControllerParams, type StopReason } from '../../../src/recording/session-controller.js'
 import { processRecording } from '../../../src/recording/post-process.js'
@@ -139,7 +140,7 @@ function fakeClient(voiceMemberIds: string[]) {
   const members = new Map<string, { user: { bot: boolean } }>()
   for (const id of voiceMemberIds) members.set(id, { user: { bot: false } })
   members.set('bot-self', { user: { bot: true } })
-  const voice = { isVoiceBased: () => true, name: 'Table 1', members }
+  const voice = { type: ChannelType.GuildVoice, name: 'Table 1', members }
   /** Mutate to simulate people leaving/arriving as seen over REST. */
   const voiceMembers = members
   const client = {
