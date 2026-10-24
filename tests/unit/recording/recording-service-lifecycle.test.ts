@@ -35,6 +35,7 @@ jest.mock('../../../src/recording/session-controller.js', () => ({
 
 import {
   RecordingService,
+  ChannelOutsideGuildError,
   GuildConflictError,
   SessionNotFoundError,
   parseScheduledEndAt,
@@ -50,8 +51,21 @@ const silentLogger = {
 } as never
 ;(silentLogger as { child: jest.Mock }).child.mockReturnValue(silentLogger)
 
+/** Channels the fake client can fetch: id → its guild. */
+const channelGuilds = new Map<string, string>()
+
 function service() {
-  const client = { isReady: () => true, user: { id: 'bot-self' } } as never
+  const client = {
+    isReady: () => true,
+    user: { id: 'bot-self' },
+    channels: {
+      fetch: jest.fn(async (id: string) => {
+        const guildId = channelGuilds.get(id)
+        if (!guildId) throw new Error('Unknown Channel')
+        return { id, guildId }
+      }),
+    },
+  } as never
   const config = {
     deepgramMode: 'disabled',
     deepgramKey: null,
@@ -69,6 +83,7 @@ function service() {
 
 beforeEach(() => {
   controllers.length = 0
+  channelGuilds.clear()
   jest.clearAllMocks()
 })
 
@@ -131,5 +146,35 @@ describe('RecordingService lifecycle wiring', () => {
     await svc.promptEnd(id)
     expect(controllers[0]!.promptEnd).toHaveBeenCalledWith('event-ended')
     await expect(svc.promptEnd('nope')).rejects.toBeInstanceOf(SessionNotFoundError)
+  })
+})
+
+describe('RecordingService holds the channels to the guild (cs#496 fix 4)', () => {
+  it("hands the controller the guild's own text channel and thread", async () => {
+    channelGuilds.set('tc1', 'g1').set('th1', 'g1')
+    const svc = service()
+    await svc.start({ guildId: 'g1', voiceChannelId: 'vc1', textChannelId: 'tc1', threadId: 'th1' })
+    expect(controllers[0]!.params).toMatchObject({ textChannelId: 'tc1', existingThreadId: 'th1' })
+  })
+
+  it("refuses another guild's thread before any controller exists, and frees the guild's slot", async () => {
+    channelGuilds.set('tc1', 'g1').set('th-elsewhere', 'g2')
+    const svc = service()
+    await expect(
+      svc.start({ guildId: 'g1', voiceChannelId: 'vc1', textChannelId: 'tc1', threadId: 'th-elsewhere' }),
+    ).rejects.toBeInstanceOf(ChannelOutsideGuildError)
+    expect(controllers).toHaveLength(0)
+    expect(svc.activeCount).toBe(0)
+    // The refusal released the reservation: the guild can record again.
+    await expect(svc.start({ guildId: 'g1', voiceChannelId: 'vc1' })).resolves.toBeDefined()
+  })
+
+  it("refuses another guild's text channel", async () => {
+    channelGuilds.set('tc-elsewhere', 'g2')
+    const svc = service()
+    await expect(svc.start({ guildId: 'g1', voiceChannelId: 'vc1', textChannelId: 'tc-elsewhere' })).rejects.toBeInstanceOf(
+      ChannelOutsideGuildError,
+    )
+    expect(controllers).toHaveLength(0)
   })
 })

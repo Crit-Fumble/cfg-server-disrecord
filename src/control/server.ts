@@ -10,6 +10,7 @@
  * API:
  *   POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription?, threadId?,
  *                                     scheduledEndAt?, discordEventId? } → { recordingId }
+ *                                  → 422 channel_outside_guild when the text channel or thread is another guild's
  *   POST /v1/recordings/:id/pause  → 204
  *   POST /v1/recordings/:id/resume → 204
  *   POST /v1/recordings/:id/stop   → 200   (blocks until delivery complete)
@@ -26,7 +27,7 @@
  */
 
 import Fastify, { type FastifyInstance } from 'fastify'
-import { GuildConflictError, SessionNotFoundError } from '../recording/recording-service.js'
+import { ChannelOutsideGuildError, GuildConflictError, SessionNotFoundError } from '../recording/recording-service.js'
 import { assertOpenSurfaceBindIsSafe, registerDashboard } from './dashboard.js'
 import { registerSettingsRoutes } from '../settings/settings-routes.js'
 import type { SettingsStore } from '../settings/settings-store.js'
@@ -180,6 +181,9 @@ export async function startControlServer(params: ControlServerParams): Promise<F
     } catch (err) {
       if (err instanceof GuildConflictError) {
         return reply.status(409).send({ error: 'guild_conflict', conflictingRecordingId: err.conflictingRecordingId })
+      }
+      if (err instanceof ChannelOutsideGuildError) {
+        return reply.status(422).send({ error: 'channel_outside_guild', channel: err.channel, message: err.message })
       }
       logger.error({ err }, 'control: start recording failed')
       return reply.status(500).send({ error: err instanceof Error ? err.message : 'start failed' })
