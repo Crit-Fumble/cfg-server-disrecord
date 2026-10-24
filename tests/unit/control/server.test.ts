@@ -7,7 +7,7 @@
 import type { FastifyInstance } from 'fastify'
 import { startControlServer } from '../../../src/control/server.js'
 import { createControlAuthenticator } from '../../../src/control/auth.js'
-import { GuildConflictError, SessionNotFoundError } from '../../../src/recording/recording-service.js'
+import { ChannelOutsideGuildError, GuildConflictError, SessionNotFoundError } from '../../../src/recording/recording-service.js'
 import type { RecordingService } from '../../../src/recording/recording-service.js'
 import { logger } from '../../../src/logger.js'
 import { testSettingsStore } from '../../_lib/settings.js'
@@ -146,6 +146,22 @@ describe('control server', () => {
       })
       expect(res.statusCode).toBe(409)
       expect(res.json()).toMatchObject({ conflictingRecordingId: 'rec-existing' })
+    })
+
+    it('POST /v1/recordings 422s when the text channel or thread is another guild\'s', async () => {
+      const service = fakeService({
+        start: jest.fn(async () => {
+          throw new ChannelOutsideGuildError('thread')
+        }) as unknown as RecordingService['start'],
+      })
+      app = await makeServer(service)
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/recordings',
+        payload: { guildId: 'g1', voiceChannelId: 'vc1', threadId: 'th-elsewhere' },
+      })
+      expect(res.statusCode).toBe(422)
+      expect(res.json()).toMatchObject({ error: 'channel_outside_guild', channel: 'thread' })
     })
 
     it('pause / resume / stop hit the service and return 204 / 204 / 200', async () => {

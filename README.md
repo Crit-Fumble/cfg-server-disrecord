@@ -204,6 +204,15 @@ generous client timeout — a long session takes minutes to mix and upload.
 `POST /v1/recordings` also accepts `scheduledEndAt` (ISO) and
 `discordEventId`; both are optional and only feed the lifecycle below.
 
+The text channel and a `threadId` to reuse must be channels of `guildId`: one
+from another server answers `422 { error: 'channel_outside_guild' }` and nothing
+starts. The check is only that the bot can fetch the channel and which server it
+is in; it checks no permission. A thread the bot cannot fetch is dropped, and a
+new one is made under the text channel. A text channel the bot cannot fetch is
+replaced by the voice channel, which cannot parent a thread: unless a thread is
+reused, consent prompts then go to the voice channel's chat, and no transcript
+or recording is posted to Discord.
+
 ### When a recording ends on its own
 
 The worker is the thing in the voice channel, so it decides when the table is

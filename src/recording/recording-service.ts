@@ -17,12 +17,13 @@ import { CoreServerClient } from '../phone-home/core-client.js'
 import type { SettingsStore } from '../settings/settings-store.js'
 import type { InteractionDelivery } from '../gateway/interaction-delivery.js'
 import { isVoiceChannelType } from '../discord/voice-channel.js'
+import { ChannelOutsideGuildError, resolveSessionChannels } from '../discord/session-channels.js'
 import type { Client } from 'discord.js'
 import type { OutputSink } from './output-sink.js'
 import type { StandaloneConfig } from '../config.js'
 import type { Logger } from '../logger.js'
 
-export { GuildConflictError, SessionNotFoundError }
+export { ChannelOutsideGuildError, GuildConflictError, SessionNotFoundError }
 
 export interface StartRecordingRequest {
   guildId: string
@@ -102,8 +103,9 @@ export class RecordingService {
 
   /**
    * Start a new recording. Throws {@link GuildConflictError} when the guild
-   * already has an active recording. Resolves once voice is joined and the
-   * initial consent prompt is posted.
+   * already has an active recording, and {@link ChannelOutsideGuildError} when
+   * the text channel or the thread to reuse is another guild's. Resolves once
+   * voice is joined and the initial consent prompt is posted.
    */
   async start(req: StartRecordingRequest): Promise<string> {
     // CFG-hosted: use the installationId as our recording id so every
@@ -120,6 +122,16 @@ export class RecordingService {
     // the lock while we're joining voice.
     this.registry.reserve(recordingId, req.guildId)
 
+    // Held to the guild before anything is posted (session-channels.ts).
+    const channels = await resolveSessionChannels(
+      this.client,
+      { guildId: req.guildId, voiceChannelId: req.voiceChannelId, textChannelId, threadId: req.threadId ?? null },
+      this.logger,
+    ).catch((err: unknown) => {
+      this.registry.release(req.guildId, recordingId)
+      throw err
+    })
+
     // Transcription is on unless the session's Deepgram mode is 'disabled'
     // (and the caller didn't opt out). Platform mode has no static key — the
     // container mints grant tokens — so a missing `deepgramKey` does not
@@ -132,7 +144,7 @@ export class RecordingService {
       client: this.client,
       guildId: req.guildId,
       voiceChannelId: req.voiceChannelId,
-      textChannelId,
+      textChannelId: channels.textChannelId,
       discordWebBase: this.config.discord.webBase,
       transcription,
       deepgramMode: this.config.deepgramMode,
@@ -146,7 +158,7 @@ export class RecordingService {
       // place to clean up.
       keepPcmDir: this.config.keepPcm ? this.config.outputDir : undefined,
       invokerUserId: req.invokerUserId,
-      existingThreadId: req.threadId ?? null,
+      existingThreadId: channels.threadId,
       scheduledEndAt: parseScheduledEndAt(req.scheduledEndAt),
       discordEventId: req.discordEventId ?? null,
       // A stop the WORKER decided on (bot kicked, channel empty, end button)
