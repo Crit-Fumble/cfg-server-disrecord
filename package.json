@@ -32,7 +32,7 @@
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.27.0",
-    "fastify": "^5.12.5",
+    "fastify": "^5.12.6",
     "jose": "^6.2.12",
     "libsodium-wrappers": "^0.8.4",
     "pino": "^10.4.0",
