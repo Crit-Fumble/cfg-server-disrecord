@@ -21,6 +21,11 @@ describe('buildDeepgramUrl — defaults', () => {
     expect(url.startsWith('wss://api.deepgram.com/v1/listen?')).toBe(true)
   })
 
+  it('opts every request out of the Model Improvement Program, which the privacy policy promises', () => {
+    expect(params(buildDeepgramUrl()).get('mip_opt_out')).toBe('true')
+    expect(params(buildDeepgramUrl({ model: 'nova-2', utteranceEndMs: 1000 })).get('mip_opt_out')).toBe('true')
+  })
+
   it('defaults model to nova-3', () => {
     expect(params(buildDeepgramUrl()).get('model')).toBe('nova-3')
   })

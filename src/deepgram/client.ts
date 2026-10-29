@@ -94,6 +94,9 @@ export function buildDeepgramUrl(options: DeepgramStreamOptions = {}): string {
     channels: String(options.channels ?? 1),
     punctuate: String(options.punctuate ?? true),
     interim_results: String(interimResults),
+    // Out of Deepgram's Model Improvement Program: an opted-out request's audio is kept only while it is
+    // processed. The platform's privacy policy promises this; no caller may turn it off.
+    mip_opt_out: 'true',
   })
 
   if (options.smartFormat) params.set('smart_format', 'true')
