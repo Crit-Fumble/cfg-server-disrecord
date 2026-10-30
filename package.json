@@ -27,8 +27,8 @@
     "prepare": "husky"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1155.0",
-    "@aws-sdk/lib-storage": "^3.1155.0",
+    "@aws-sdk/client-s3": "^3.1157.0",
+    "@aws-sdk/lib-storage": "^3.1157.0",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.2",
     "discord.js": "^14.27.0",
