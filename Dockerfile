@@ -18,7 +18,8 @@
 # only ships x64-glibc prebuilds (no musl/alpine support). Apple-silicon devs
 # may need to compile @discordjs/opus from source via the toolchain in deps.
 
-FROM node:24-slim AS base
+# Pinned by digest: the tag is rebuilt in place with a new Node patch and CA store. Dependabot's docker ecosystem bumps it.
+FROM node:24-slim@sha256:c86ecead9e55a5210ac1727de38a4ca840bf03dcaf34dc9749addbf383b1920c AS base
 WORKDIR /app
 
 # ── Stage 1: deps ────────────────────────────────────────────────────────────
