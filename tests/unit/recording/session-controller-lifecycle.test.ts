@@ -166,7 +166,6 @@ function makeCore() {
     postBillingTick: jest.fn(async () => ({ insufficientCoins: false })),
     postRecordingThread: jest.fn(async () => undefined),
     postParticipants: jest.fn(async () => undefined),
-    postChunk: jest.fn(async () => undefined),
     postRecordingEnded: jest.fn(async (_reason: StopReason, _durationMs?: number) => undefined),
   }
 }
