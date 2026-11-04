@@ -16,6 +16,18 @@ describe('padSilenceAndAppend', () => {
     expect(state.bytesWritten.get('u1')).toBe(frame.length)
   })
 
+  it('returns the first frame unchanged even when the clock ticks during the call', () => {
+    let t = 1_000_000
+    const spy = jest.spyOn(Date, 'now').mockImplementation(() => t++)
+    try {
+      const state = createSilencePadState()
+      const frame = Buffer.alloc(960, 1)
+      expect(padSilenceAndAppend(state, 'u1', frame)).toBe(frame)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('returns an empty frame unchanged', () => {
     const state = createSilencePadState()
     const out = padSilenceAndAppend(state, 'u1', Buffer.alloc(0))

@@ -50,12 +50,14 @@ export function createSilencePadState(): SilencePadState {
 export function padSilenceAndAppend(state: SilencePadState, userId: string, frame: Buffer): Buffer {
   if (frame.length === 0) return frame
 
+  // One clock read: a millisecond tick between anchoring and measuring would pad the first frame.
+  const now = Date.now()
   if (state.sessionStartedAtMs === null) {
-    state.sessionStartedAtMs = Date.now()
+    state.sessionStartedAtMs = now
   }
 
   const bytesWritten = state.bytesWritten.get(userId) ?? 0
-  const elapsedMs = Date.now() - state.sessionStartedAtMs
+  const elapsedMs = now - state.sessionStartedAtMs
   // Round DOWN to an even byte boundary so we never over-pad past global
   // time and s16le sample alignment stays correct.
   let expectedBytes = Math.floor(elapsedMs * PCM_BYTES_PER_MS)
