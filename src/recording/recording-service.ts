@@ -104,8 +104,10 @@ export class RecordingService {
   /**
    * Start a new recording. Throws {@link GuildConflictError} when the guild
    * already has an active recording, and {@link ChannelOutsideGuildError} when
-   * the text channel or the thread to reuse is another guild's. Resolves once
-   * voice is joined and the initial consent prompt is posted.
+   * the text channel or the thread to reuse is another guild's. A Discord error
+   * other than a missing channel while reading either one rejects the start too,
+   * with the guild's slot freed. Resolves once voice is joined and the initial
+   * consent prompt is posted.
    */
   async start(req: StartRecordingRequest): Promise<string> {
     // CFG-hosted: use the installationId as our recording id so every

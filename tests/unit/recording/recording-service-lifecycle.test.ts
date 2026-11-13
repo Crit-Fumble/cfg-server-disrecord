@@ -6,6 +6,8 @@
  *   - a stop the WORKER decided on (the controller's `onStopped`) releases the
  *     registry slot, so /healthz stops counting it and the guild is free to
  *     record again.
+ *   - a transient failure to read the text channel or the thread rejects `start`
+ *     and frees the guild's slot, so the start can be retried.
  *   - `stop()` is a `control-stop`, `stopAll()` a `shutdown`, `promptEnd()`
  *     routes to the controller and 404s an unknown recording.
  */
@@ -40,6 +42,7 @@ import {
   SessionNotFoundError,
   parseScheduledEndAt,
 } from '../../../src/recording/recording-service.js'
+import { DiscordAPIError, HTTPError } from 'discord.js'
 import { testSettingsStore } from '../../_lib/settings.js'
 
 const silentLogger = {
@@ -53,6 +56,8 @@ const silentLogger = {
 
 /** Channels the fake client can fetch: id → its guild. */
 const channelGuilds = new Map<string, string>()
+/** Channels whose fetch fails with the given error, ahead of the above. */
+const fetchErrors = new Map<string, Error>()
 
 function service() {
   const client = {
@@ -60,8 +65,12 @@ function service() {
     user: { id: 'bot-self' },
     channels: {
       fetch: jest.fn(async (id: string) => {
+        const failure = fetchErrors.get(id)
+        if (failure) throw failure
         const guildId = channelGuilds.get(id)
-        if (!guildId) throw new Error('Unknown Channel')
+        if (!guildId) {
+          throw new DiscordAPIError({ code: 10003, message: 'Unknown Channel' }, 10003, 404, 'GET', 'https://discord.com/api/v10/channels/x', {})
+        }
         return { id, guildId }
       }),
     },
@@ -84,6 +93,7 @@ function service() {
 beforeEach(() => {
   controllers.length = 0
   channelGuilds.clear()
+  fetchErrors.clear()
   jest.clearAllMocks()
 })
 
@@ -176,5 +186,26 @@ describe('RecordingService holds the channels to the guild (cs#496 fix 4)', () =
       ChannelOutsideGuildError,
     )
     expect(controllers).toHaveLength(0)
+  })
+})
+
+describe('RecordingService on a transient failure to read a channel', () => {
+  const outage = new HTTPError(503, 'Service Unavailable', 'GET', 'https://discord.com/api/v10/channels/x', {})
+
+  it.each<[string, { textChannelId: string; threadId?: string }, string]>([
+    ['text channel', { textChannelId: 'tc1' }, 'tc1'],
+    ['thread', { textChannelId: 'tc1', threadId: 'th1' }, 'th1'],
+  ])('the %s: rejects the start, makes no controller and frees the guild slot', async (_name, channels, failing) => {
+    channelGuilds.set('tc1', 'g1').set('th1', 'g1')
+    fetchErrors.set(failing, outage)
+    const svc = service()
+    await expect(svc.start({ guildId: 'g1', voiceChannelId: 'vc1', ...channels })).rejects.toBe(outage)
+    expect(controllers).toHaveLength(0)
+    expect(svc.activeCount).toBe(0)
+
+    // The slot is free: a retry once Discord answers is not a GuildConflictError.
+    fetchErrors.clear()
+    await expect(svc.start({ guildId: 'g1', voiceChannelId: 'vc1', ...channels })).resolves.toBeDefined()
+    expect(controllers[0]!.params).toMatchObject({ textChannelId: 'tc1', existingThreadId: channels.threadId ?? null })
   })
 })
