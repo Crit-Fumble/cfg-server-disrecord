@@ -13,19 +13,23 @@
  *
  *   - Known to be outside the guild (another guild's, or not a guild channel):
  *     the start is refused (ChannelOutsideGuildError).
- *   - Cannot be fetched (the fetch throws or returns nothing): never used.
+ *   - Gone or hidden (the fetch returns nothing, or Discord answers 10003 Unknown
+ *     Channel or 50001 Missing Access): never used.
  *     - The text channel: the voice channel stands in, as when none is named. A
  *       voice channel cannot parent a thread, so unless a thread is reused,
  *       createRecordingThread makes none: consent prompts go to the voice
  *       channel's chat, and no transcript or recording is posted to Discord.
  *     - A thread to reuse: dropped, and a new one is made under the text
  *       channel (none when the voice channel stands in for it).
+ *   - Any other failure (a 5xx, a timeout, a network error, a rate limit): the
+ *     channel may be fine, so the start fails instead of recording in the wrong
+ *     place, and the caller can retry it.
  *
  * The voice channel needs no check here: the join fetches it through the guild,
  * which refuses a channel of another guild.
  */
 
-import type { Client } from 'discord.js'
+import { DiscordAPIError, RESTJSONErrorCodes, type Client } from 'discord.js'
 import type { Logger } from '../logger.js'
 
 export type SessionChannelKind = 'text channel' | 'thread'
@@ -40,8 +44,17 @@ export class ChannelOutsideGuildError extends Error {
 
 type Placement = 'in-guild' | 'outside' | 'unreadable'
 
+/** Discord's answers for a channel that is gone or that the bot cannot see. */
+const UNREADABLE_CODES: ReadonlySet<unknown> = new Set([
+  RESTJSONErrorCodes.UnknownChannel,
+  RESTJSONErrorCodes.MissingAccess,
+])
+
 async function placement(client: Client, channelId: string, guildId: string): Promise<Placement> {
-  const channel = await client.channels.fetch(channelId).catch(() => null)
+  const channel = await client.channels.fetch(channelId).catch((err: unknown) => {
+    if (err instanceof DiscordAPIError && UNREADABLE_CODES.has(err.code)) return null
+    throw err
+  })
   if (!channel) return 'unreadable'
   const channelGuildId = 'guildId' in channel ? channel.guildId : null
   return channelGuildId === guildId ? 'in-guild' : 'outside'
