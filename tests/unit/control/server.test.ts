@@ -9,6 +9,7 @@ import { startControlServer } from '../../../src/control/server.js'
 import { createControlAuthenticator } from '../../../src/control/auth.js'
 import { ChannelOutsideGuildError, GuildConflictError, SessionNotFoundError } from '../../../src/recording/recording-service.js'
 import type { RecordingService } from '../../../src/recording/recording-service.js'
+import { VoiceJoinError } from '../../../src/gateway/voice-capture.js'
 import { logger } from '../../../src/logger.js'
 import { testSettingsStore } from '../../_lib/settings.js'
 
@@ -162,6 +163,37 @@ describe('control server', () => {
       })
       expect(res.statusCode).toBe(422)
       expect(res.json()).toMatchObject({ error: 'channel_outside_guild', channel: 'thread' })
+    })
+
+    it('POST /v1/recordings 502s voice_join_failed, with no detail, when the bot cannot join the voice channel', async () => {
+      const service = fakeService({
+        start: jest.fn(async () => {
+          throw new VoiceJoinError('Cannot fetch guild g1 — bot not invited?')
+        }) as unknown as RecordingService['start'],
+      })
+      app = await makeServer(service)
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/recordings',
+        payload: { guildId: 'g1', voiceChannelId: 'vc1' },
+      })
+      expect(res.statusCode).toBe(502)
+      expect(res.json()).toEqual({ error: 'voice_join_failed' })
+    })
+
+    it('POST /v1/recordings 500s on any other start failure', async () => {
+      const service = fakeService({
+        start: jest.fn(async () => {
+          throw new Error('disk full')
+        }) as unknown as RecordingService['start'],
+      })
+      app = await makeServer(service)
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/recordings',
+        payload: { guildId: 'g1', voiceChannelId: 'vc1' },
+      })
+      expect(res.statusCode).toBe(500)
     })
 
     it('pause / resume / stop hit the service and return 204 / 204 / 200', async () => {

@@ -10,7 +10,9 @@
  * API:
  *   POST /v1/recordings            { guildId, voiceChannelId, textChannelId?, transcription?, threadId?,
  *                                     scheduledEndAt?, discordEventId? } → { recordingId }
+ *                                  → 409 guild_conflict when the guild already has a recording
  *                                  → 422 channel_outside_guild when the text channel or thread is another guild's
+ *                                  → 502 voice_join_failed when the bot cannot join the voice channel
  *   POST /v1/recordings/:id/pause  → 204
  *   POST /v1/recordings/:id/resume → 204
  *   POST /v1/recordings/:id/stop   → 200   (blocks until delivery complete)
@@ -28,6 +30,7 @@
 
 import Fastify, { type FastifyInstance } from 'fastify'
 import { ChannelOutsideGuildError, GuildConflictError, SessionNotFoundError } from '../recording/recording-service.js'
+import { VoiceJoinError } from '../gateway/voice-capture.js'
 import { assertOpenSurfaceBindIsSafe, registerDashboard } from './dashboard.js'
 import { registerSettingsRoutes } from '../settings/settings-routes.js'
 import type { SettingsStore } from '../settings/settings-store.js'
@@ -184,6 +187,9 @@ export async function startControlServer(params: ControlServerParams): Promise<F
       }
       if (err instanceof ChannelOutsideGuildError) {
         return reply.status(422).send({ error: 'channel_outside_guild', channel: err.channel, message: err.message })
+      }
+      if (err instanceof VoiceJoinError) {
+        return reply.status(502).send({ error: 'voice_join_failed' })
       }
       logger.error({ err }, 'control: start recording failed')
       return reply.status(500).send({ error: err instanceof Error ? err.message : 'start failed' })
