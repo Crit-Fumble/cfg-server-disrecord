@@ -386,6 +386,8 @@ export class SessionController {
    * silently drop lines (#11).
    */
   private webhookManager: SpeakerWebhookManager | null = null
+  /** Captions posted as the bot, which a speaker's webhook cannot edit. */
+  private readonly botCaptionIds = new Set<string>()
   private openParagraphs = new Map<string, OpenParagraph>()
   /**
    * Id of the most recent message WE posted to the thread, across all
@@ -534,6 +536,13 @@ export class SessionController {
         this.logger.warn({ err }, 'local consent seed failed — every speaker will be prompted')
       }
     }
+
+    // The per-speaker webhook manager exists before the session can hear anyone: a caption from the
+    // first words would otherwise go out as the bot (no name, no avatar). It posts nothing itself;
+    // a speaker's webhook is made on their first caption. init() sweeps stale `cfg-resesh-rec-*`
+    // webhooks a crashed session left, freeing slots under Discord's 15-per-channel cap.
+    this.webhookManager = new SpeakerWebhookManager(p.client, p.textChannelId, this.recordingId, this.logger)
+    void this.webhookManager.init()
 
     this.session = new RecordingSession({
       deepgramTokenProvider: tokenProvider,
@@ -705,19 +714,6 @@ export class SessionController {
         memberIds,
       )
     }
-
-    // Spin up the per-speaker webhook manager. Each speaker's live caption
-    // posts via their own webhook (their name + avatar) so Discord groups
-    // consecutive same-speaker messages under one header — natively. The
-    // manager itself does NOT post anything yet; webhooks are created
-    // lazily on the first interim from a given speaker.
-    //
-    // init() sweeps any stale `cfg-resesh-rec-*` webhooks left in the
-    // parent channel by crashed prior sessions, freeing slots back to
-    // Discord's 15-webhook cap before this session starts creating its
-    // own. Fired-and-forgotten — it doesn't depend on the voice connection.
-    this.webhookManager = new SpeakerWebhookManager(p.client, p.textChannelId, this.recordingId, this.logger)
-    void this.webhookManager.init()
 
     this.status = 'recording'
 
@@ -1759,13 +1755,16 @@ export class SessionController {
       }
     }
     // Bot-message fallback (no MANAGE_WEBHOOKS, webhook cap hit, or send error).
-    return this.postBotMessage(`**${speakerName}:** ${truncated}`)
+    const id = await this.postBotMessage(`**${speakerName}:** ${truncated}`)
+    if (id) this.botCaptionIds.add(id)
+    return id
   }
 
-  /** Edit a previously-posted caption (webhook OR bot — id alone disambiguates). */
+  /** Edit a previously-posted caption the way it was posted: a bot caption never through a webhook made since. */
   private async editCaption(speakerId: string, messageId: string, content: string): Promise<void> {
     if (!this.threadId) return
     const truncated = truncateForDiscord(content)
+    if (this.botCaptionIds.has(messageId)) return this.editBotMessage(messageId, truncated)
     const webhook = await this.resolveSpeakerWebhook(speakerId, null)
     if (webhook) {
       try {
