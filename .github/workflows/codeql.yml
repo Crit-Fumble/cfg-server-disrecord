@@ -1,0 +1,43 @@
+name: CodeQL
+
+# CodeQL advanced setup (owner, 2026-11-20): default setup's scan plus .github/codeql/codeql-config.yml,
+# which leaves out the tests. GitHub refuses these uploads while the repo's default setup is on.
+#
+# ⚠️ Keep each `category` as `/language:<language>`, default setup's own. An analysis replaces the
+# last one with the same ref, tool and category, so a renamed category leaves default setup's
+# alerts open, the ignored paths' included.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '37 19 * * 6'
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          category: /language:${{ matrix.language }}

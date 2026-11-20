@@ -1,0 +1,6 @@
+# Read by .github/workflows/codeql.yml. The scan sees shipped code only, not tests.
+name: cfg-server-disrecord CodeQL config
+
+paths-ignore:
+  - 'tests/**'
+  - '**/__mocks__/**'
