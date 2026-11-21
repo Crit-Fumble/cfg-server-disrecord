@@ -130,15 +130,6 @@ export interface RecordingSessionParams {
    * transcribed verbatim).
    */
   consentedUserIds?: Set<string>
-  /**
-   * Override the Deepgram segmentation tuning for this session. Production
-   * never sets it — the defaults in {@link DEEPGRAM_STREAM_TUNING} are the
-   * tuned values. It exists so the tuning harness (#12) can sweep a settings
-   * matrix through the REAL session pipeline, including the forced-Finalize
-   * timer below, rather than against a reimplementation that would measure
-   * something else.
-   */
-  tuning?: Partial<DeepgramStreamTuning>
   logger?: Logger
 }
 
@@ -160,7 +151,6 @@ export class RecordingSession {
   private readonly onTranscriptFinal: (event: TranscriptFinalEvent) => void | Promise<void>
   private readonly onTranscriptInterim: ((event: TranscriptInterimEvent) => void) | null
   private readonly consentedUserIds: Set<string> | null
-  private readonly tuning: DeepgramStreamTuning
   private readonly logger: Logger | null
 
   private readonly speakerStreams = new Map<string, DeepgramStreamingClient>()
@@ -226,7 +216,6 @@ export class RecordingSession {
     this.onTranscriptFinal = params.onTranscriptFinal
     this.onTranscriptInterim = params.onTranscriptInterim ?? null
     this.consentedUserIds = params.consentedUserIds ?? null
-    this.tuning = { ...DEEPGRAM_STREAM_TUNING, ...params.tuning }
     this.logger = params.logger ?? null
   }
 
@@ -310,9 +299,9 @@ export class RecordingSession {
       sampleRate: OPUS_SAMPLE_RATE,
       channels: 1,
       smartFormat: true,
-      utteranceEndMs: this.tuning.utteranceEndMs,
-      endpointing: this.tuning.endpointing,
-      vadEvents: this.tuning.vadEvents,
+      utteranceEndMs: DEEPGRAM_STREAM_TUNING.utteranceEndMs,
+      endpointing: DEEPGRAM_STREAM_TUNING.endpointing,
+      vadEvents: DEEPGRAM_STREAM_TUNING.vadEvents,
       keywords: this.keywords.length > 0 ? this.keywords : undefined,
       keyterms: this.keyterms.length > 0 ? this.keyterms : undefined,
     })
@@ -453,7 +442,7 @@ export class RecordingSession {
             this.logger?.warn({ err, userId }, 'silence-window finalize threw')
           }
         }
-      }, this.tuning.utteranceEndMs)
+      }, DEEPGRAM_STREAM_TUNING.utteranceEndMs)
       timer.unref()
       this.pendingFinalizeTimers.set(userId, timer)
     }

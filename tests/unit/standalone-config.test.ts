@@ -1,7 +1,7 @@
 /**
  * Standalone (serve mode) config resolution.
  */
-import { keepPcmWasIgnored, resolveStandaloneConfig } from '../../src/config.js'
+import { resolveStandaloneConfig } from '../../src/config.js'
 
 const BASE_ENV = {
   DISRECORD_DISCORD_TOKEN: 'bot-token',
@@ -89,60 +89,6 @@ describe('resolveStandaloneConfig', () => {
     it('cfg stays undefined for a self-host container regardless of rate envs', () => {
       setEnv({ ...BASE_ENV, DISRECORD_TRANSCRIPTION_CT_PER_MIN: '2' })
       expect(resolveStandaloneConfig().cfg).toBeUndefined()
-    })
-  })
-
-  // Per-speaker audio is the most sensitive artifact the container holds, so
-  // retention must be impossible to enable by accident (#12).
-  describe('DISRECORD_KEEP_PCM', () => {
-    it('is off unless explicitly set', () => {
-      setEnv(BASE_ENV)
-      expect(resolveStandaloneConfig().keepPcm).toBe(false)
-    })
-
-    it('accepts an explicit opt-in', () => {
-      setEnv({ ...BASE_ENV, DISRECORD_KEEP_PCM: '1' })
-      expect(resolveStandaloneConfig().keepPcm).toBe(true)
-      setEnv({ ...BASE_ENV, DISRECORD_KEEP_PCM: 'true' })
-      expect(resolveStandaloneConfig().keepPcm).toBe(true)
-    })
-
-    it('stays off for anything else — including values that merely look set', () => {
-      for (const value of ['0', 'false', '', 'yes', 'no', 'off']) {
-        setEnv({ ...BASE_ENV, DISRECORD_KEEP_PCM: value })
-        expect(resolveStandaloneConfig().keepPcm).toBe(false)
-      }
-    })
-
-    it('is REFUSED on a CFG-hosted container, whatever the env says', () => {
-      // Those speakers consented to being recorded — a mixed mp3 in their own
-      // Discord thread — not to the platform keeping their separated,
-      // individually-identifiable voice track. A self-hoster retaining their
-      // own group's audio is their call; CFG making that call for a user is not.
-      setEnv({
-        ...BASE_ENV,
-        DISRECORD_KEEP_PCM: '1',
-        CORE_SERVER_URL: 'http://core:3001',
-        CORE_SERVER_TOKEN: 'jwt',
-        DISRECORD_INSTALLATION_ID: 'inst-1',
-        DISRECORD_USER_ID: 'user-1',
-      })
-      const c = resolveStandaloneConfig()
-      expect(c.cfg).toBeDefined()
-      expect(c.keepPcm).toBe(false)
-      expect(keepPcmWasIgnored(c)).toBe(true)
-    })
-
-    it('does not claim it was ignored when it was never asked for', () => {
-      setEnv(BASE_ENV)
-      expect(keepPcmWasIgnored(resolveStandaloneConfig())).toBe(false)
-    })
-
-    it('does not claim it was ignored when self-host honoured it', () => {
-      setEnv({ ...BASE_ENV, DISRECORD_KEEP_PCM: '1' })
-      const c = resolveStandaloneConfig()
-      expect(c.keepPcm).toBe(true)
-      expect(keepPcmWasIgnored(c)).toBe(false)
     })
   })
 })

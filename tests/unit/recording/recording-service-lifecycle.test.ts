@@ -81,7 +81,6 @@ function service() {
     deepgramModel: 'nova-3',
     deepgramLanguage: 'en',
     chunkMinutes: 0,
-    keepPcm: false,
     outputDir: '/tmp',
     consentStorePath: '/tmp/consent.json',
     discord: { apiBase: 'https://discord.com/api', webBase: 'https://discord.com' },
