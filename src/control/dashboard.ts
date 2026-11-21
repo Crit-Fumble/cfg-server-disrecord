@@ -45,6 +45,9 @@ import { DASHBOARD_HTML } from './dashboard-html.js'
  * Self-host takes `CONTROL_HOST`, which the image sets to 0.0.0.0, so in the
  * container this is what makes `CONTROL_TOKEN` required.
  */
+/** A control token this short can be guessed; `openssl rand -hex 32` makes 64 characters. */
+export const MIN_CONTROL_TOKEN_LENGTH = 32
+
 export function assertOpenSurfaceBindIsSafe(
   host: string,
   controlToken: string | undefined,
@@ -56,12 +59,20 @@ export function assertOpenSurfaceBindIsSafe(
   surface = 'self-host dashboard',
 ): void {
   const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1'
-  if (loopback || controlToken) return
-  throw new Error(
-    `refusing to serve the ${surface} on ${host} without CONTROL_TOKEN — ` +
-      'a non-loopback bind with no auth is an open recording surface. Set CONTROL_TOKEN, ' +
-      'or set CONTROL_HOST=127.0.0.1 (a container needs the wide bind, so set the token).',
-  )
+  if (loopback) return
+  if (!controlToken) {
+    throw new Error(
+      `refusing to serve the ${surface} on ${host} without CONTROL_TOKEN — ` +
+        'a non-loopback bind with no auth is an open recording surface. Set CONTROL_TOKEN, ' +
+        'or set CONTROL_HOST=127.0.0.1 (a container needs the wide bind, so set the token).',
+    )
+  }
+  if (controlToken.length < MIN_CONTROL_TOKEN_LENGTH) {
+    throw new Error(
+      `refusing to serve the ${surface} on ${host}: CONTROL_TOKEN is shorter than ${MIN_CONTROL_TOKEN_LENGTH} ` +
+        'characters, short enough to guess. Make one with `openssl rand -hex 32`.',
+    )
+  }
 }
 
 /**

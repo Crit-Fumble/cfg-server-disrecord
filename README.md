@@ -68,7 +68,7 @@ You need a Discord bot and (optionally) a Deepgram API key.
    DEEPGRAM_API_KEY=<deepgram key>   # omit for record-only (no transcript)
    OUTPUT_DIR=/data/recordings
    CONTROL_PORT=8080
-   CONTROL_TOKEN=<random secret>     # REQUIRED when running the container
+   CONTROL_TOKEN=<openssl rand -hex 32>   # REQUIRED in the container, 32+ characters
    ```
 
    ⚠️ `CONTROL_TOKEN` is required in Docker, not optional. The image binds the

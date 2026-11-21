@@ -29,6 +29,7 @@
  */
 
 import Fastify, { type FastifyInstance } from 'fastify'
+import rateLimit from '@fastify/rate-limit'
 import { ChannelOutsideGuildError, GuildConflictError, SessionNotFoundError } from '../recording/recording-service.js'
 import { VoiceJoinError } from '../gateway/voice-capture.js'
 import { assertOpenSurfaceBindIsSafe, registerDashboard } from './dashboard.js'
@@ -37,6 +38,9 @@ import type { SettingsStore } from '../settings/settings-store.js'
 import type { RecordingService } from '../recording/recording-service.js'
 import type { ControlAuthResult } from './auth.js'
 import type { Logger } from '../logger.js'
+
+/** Requests per client address per minute, far above what core-server sends a worker. */
+export const CONTROL_REQUESTS_PER_MINUTE = 300
 
 export interface ControlServerParams {
   service: RecordingService
@@ -119,6 +123,17 @@ interface ConsentBody {
 export async function startControlServer(params: ControlServerParams): Promise<FastifyInstance> {
   const { service, port, authenticate, host, logger } = params
   const app = Fastify({ logger: false })
+  // One request budget per client address for every route but /healthz, which core-server polls. An app-level hook
+  // added before the auth hook below, so a refused token still counts against it.
+  await app.register(rateLimit, { global: false })
+  app.addHook(
+    'onRequest',
+    app.rateLimit({
+      max: CONTROL_REQUESTS_PER_MINUTE,
+      timeWindow: '1 minute',
+      allowList: (req) => req.routeOptions?.url === '/healthz',
+    }),
+  )
 
   // Fail at boot rather than serving an open recording surface. No-op unless
   // the dashboard is on — see assertOpenSurfaceBindIsSafe.

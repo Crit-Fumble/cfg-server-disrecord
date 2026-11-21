@@ -5,7 +5,7 @@
  * started on an ephemeral port and closed after each test.
  */
 import type { FastifyInstance } from 'fastify'
-import { startControlServer } from '../../../src/control/server.js'
+import { CONTROL_REQUESTS_PER_MINUTE, startControlServer } from '../../../src/control/server.js'
 import { createControlAuthenticator } from '../../../src/control/auth.js'
 import { ChannelOutsideGuildError, GuildConflictError, SessionNotFoundError } from '../../../src/recording/recording-service.js'
 import type { RecordingService } from '../../../src/recording/recording-service.js'
@@ -47,6 +47,25 @@ describe('control server', () => {
   afterEach(async () => {
     if (app) await app.close()
     app = null
+  })
+
+  describe('rate limit', () => {
+    it('answers 429 once one address passes its per-minute budget, wrong token or not', async () => {
+      app = await makeServer(fakeService(), 'secret')
+      const wrong = { authorization: 'Bearer guess' }
+      for (let i = 0; i < CONTROL_REQUESTS_PER_MINUTE; i++) {
+        expect((await app.inject({ method: 'GET', url: '/v1/recordings', headers: wrong })).statusCode).toBe(401)
+      }
+      expect((await app.inject({ method: 'GET', url: '/v1/recordings', headers: wrong })).statusCode).toBe(429)
+      expect((await app.inject({ method: 'GET', url: '/v1/recordings', headers: { authorization: 'Bearer secret' } })).statusCode).toBe(429)
+    })
+
+    it('never limits /healthz, which core-server polls', async () => {
+      app = await makeServer(fakeService(), 'secret')
+      for (let i = 0; i <= CONTROL_REQUESTS_PER_MINUTE; i++) {
+        expect((await app.inject({ method: 'GET', url: '/healthz' })).statusCode).toBe(200)
+      }
+    })
   })
 
   describe('auth (static control token)', () => {

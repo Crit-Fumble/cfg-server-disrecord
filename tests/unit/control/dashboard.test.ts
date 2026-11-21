@@ -147,8 +147,17 @@ describe('assertOpenSurfaceBindIsSafe', () => {
     expect(() => assertOpenSurfaceBindIsSafe('localhost', undefined)).not.toThrow()
   })
 
-  it('allows a wide bind when a control token is set', () => {
-    expect(() => assertOpenSurfaceBindIsSafe('0.0.0.0', 'secret')).not.toThrow()
+  it('allows a wide bind when a control token of at least 32 characters is set', () => {
+    expect(() => assertOpenSurfaceBindIsSafe('0.0.0.0', 'a'.repeat(32))).not.toThrow()
+  })
+
+  it('refuses a wide bind whose control token is short enough to guess', () => {
+    expect(() => assertOpenSurfaceBindIsSafe('0.0.0.0', 'secret')).toThrow(/shorter than 32/)
+    expect(() => assertOpenSurfaceBindIsSafe('0.0.0.0', 'a'.repeat(31))).toThrow(/openssl rand -hex 32/)
+  })
+
+  it('leaves a loopback bind alone whatever the token length', () => {
+    expect(() => assertOpenSurfaceBindIsSafe('127.0.0.1', 'short')).not.toThrow()
   })
 
   it('refuses a wide bind with no token', () => {
