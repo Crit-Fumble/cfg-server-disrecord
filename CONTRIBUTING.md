@@ -1,14 +1,12 @@
 # Contributing to cfg-server-disrecord
 
-DisRecord is a **skill server** — an HTTP-driven container that lets an *existing*
-Discord bot record and transcribe a voice call. It is not a bot and has no
-slash-command surface (see the README). This repo is self-contained: it does not
+What DisRecord is: the [README](README.md). This repo is self-contained: it does not
 depend on any `@crit-fumble/*` package, so `npm install` needs no GitHub Packages
 token.
 
 ## Local dev setup
 
-You need **Node.js >= 24** (see `.nvmrc` / `engines`).
+You need the Node.js version in `.nvmrc` (and `engines`).
 
 ```bash
 npm install
@@ -18,9 +16,7 @@ npm run typecheck
 npm run build        # tsc + tsc-alias → dist/
 ```
 
-Copy `.env.example` to `.env`. Whether the container runs **CFG-hosted** or
-**local-only** (bring-your-own bot + Deepgram key) is decided purely by whether
-`CORE_SERVER_URL` is set — the `.env.example` documents both modes.
+Copy `.env.example` to `.env`; it documents both modes.
 
 `@discordjs/opus` ships a native binding; a local install may need
 `npm rebuild @discordjs/opus`. Unit tests mock it, so they run without it.
@@ -30,11 +26,6 @@ Copy `.env.example` to `.env`. Whether the container runs **CFG-hosted** or
 > Unit/typecheck cover most changes without any of that.
 
 ## Running tests
-
-```bash
-npm test           # jest
-npm run typecheck  # tsc --noEmit
-```
 
 The `pre-push` Husky hook runs the full test suite (the `cfg-*` convention).
 Don't bypass it with `--no-verify` — a red suite blocks the push for a reason.

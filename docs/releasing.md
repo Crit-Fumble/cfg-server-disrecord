@@ -8,26 +8,25 @@ Everything this repo owns to get a build into production.
 PR (version bump rides it) ──▶ next ──fast-forward──▶ main ──tag v*──▶ release.yml
                                                                           │
                                                             ghcr.io/crit-fumble/
-                                                        cfg-server-disrecord:latest
+                                                        cfg-server-disrecord:<tag>
                                                                           │
-                                   core-server pulls, then spawns ────────┘
-                                       the worker (next session)
+                         core-server spawns, by digest, the release ──────┘
+                              a host picked in Server Manager (next session)
 ```
 
 `ghcr.io/crit-fumble/cfg-server-disrecord` is a **public** package, so no pull
 secret is involved anywhere.
 
-## Tagging deploys — at the next session, not immediately
+## Tagging deploys — when a host picks the release, not immediately
 
-Production spawns **`:latest`** (owner decision 2026-08-05), and core-server
-pulls it before every spawn: `container-spawn.ts` passes `imagePull: 'always'`,
-which `clients/container/client.ts` honours by calling `pullImage` ahead of
-`createContainer` (falling back to the local copy if the registry is
-unreachable — a stale worker beats no worker).
+Production spawns, by digest, the release each DisRecord server's host picked
+in Server Manager. A server with none picked yet takes the newest release (the
+one `:latest` names) at its first launch; a recording no server owns runs the
+platform's own pinned release.
 
 So **a worker release is: tag → wait for the image**. There is no deploy step
-and no host command; the next recording session starts on the new build. A
-session already running keeps its container until it ends.
+and no host command; a server's next recording session starts on the new build
+once its host picks it. A session already running keeps its container until it ends.
 
 ## Cutting a release
 
@@ -50,15 +49,14 @@ against its local e2e stack (`npm run test:up`). It needs no Discord token:
 
 ```sh
 cd dev/e2e-tests
-node scripts/_disrecord-fixture-image.mjs --rebuild   # a stale image only warns
+node scripts/_disrecord-fixture-image.mjs --rebuild
 E2E_DOCKER=true npx playwright test --project=api tests/resesh/recorder-launch-spacebar.api.spec.ts
 ```
 
-The stack runs `cfg-server-disrecord:test`, built from dev-tools'
-`workspaces/cfg-server-disrecord` checkout only when that image is absent, which
-is why the rebuild comes first. The spec starts a recording through core-server,
-and the worker it launches logs in to the stack's Spacebar instance instead of
-Discord. It checks the launch from outside: the bot logged in, the worker read
+The stack runs `cfg-server-disrecord:test`, which the spec builds from dev-tools'
+`workspaces/cfg-server-disrecord` checkout when it is absent or stale. The spec
+starts a recording through core-server, and the worker it launches logs in to
+the stack's Spacebar instance instead of Discord. It checks the launch from outside: the bot logged in, the worker read
 the settings file core-server mounted for it, and the container's user, mounts
 and environment are the ones core-server chose. The start then fails at the
 voice join, because Spacebar's voice gateway refuses the protocol the recorder
@@ -86,9 +84,9 @@ git push origin --tags
 **4. Verify the publish actually happened.** ⚠️ Do NOT skip this, and do not
 treat a pushed tag as a shipped release.
 
-The `verify` job refuses to publish on three independent conditions (see the
-table below), and **every one of them fails AFTER the tag is pushed**, in a
-workflow nobody is required to watch. A refused publish leaves `:latest` on the
+The `verify` job refuses to publish on each condition in the table below, and
+**every one of them fails AFTER the tag is pushed**, in a workflow nobody is
+required to watch. A refused publish leaves `:latest` on the
 PREVIOUS image while the tag exists and looks successful — so anything
 downstream that assumes the new worker is live is now wrong, silently.
 
@@ -101,21 +99,22 @@ gh api /orgs/Crit-Fumble/packages/container/cfg-server-disrecord/versions \
   --jq '.[0].metadata.container.tags'
 ```
 
-Do not `docker pull` on the prod host — `imagePull: 'always'` means the next
-recording pulls it.
+Do not `docker pull` on the prod host — a launch pulls the release it runs, by
+digest.
 
 **5. Record a minute on Discord by hand.** No automated test touches real
-Discord, and prod acceptance never starts a recording, yet a published
-`:latest` reaches every user's next recording. So once `:latest` carries the new
-version, the owner makes one: start a recording from Server Manager in a test
-voice channel, say a few words, and stop it after about a minute. It passes
-when the bot joins, the thread appears, the mp3 lands in it, and the "Back to
+Discord, and prod acceptance never starts a recording, yet a published release
+reaches every server whose host picks it. So once `:latest` carries the new
+version, the owner makes one: start a recording from Server Manager, on a server
+that runs the new release, in a test voice channel, say a few words, and stop it
+after about a minute. It passes when the bot joins, the thread appears, the mp3 lands in it, and the "Back to
 Top" link at the end of the thread opens its first message.
 
 ## What the workflow refuses to publish
 
-`release.yml` gates every publish behind a `verify` job. Because `:latest` is
-what production spawns, this workflow is a production gate, not just a build.
+`release.yml` gates every publish behind a `verify` job. Because what it
+publishes is what production spawns, this workflow is a production gate, not
+just a build.
 
 | refuses when | why |
 |---|---|
@@ -124,7 +123,7 @@ what production spawns, this workflow is a production gate, not just a build.
 | CI's `test` check is not green for that exact commit | CI runs on push to main/next and on PRs — **never on tags** — so a tag on an unbuilt commit would otherwise publish untested |
 
 The check asks the API whether CI passed rather than re-running it: seconds
-instead of ~12 minutes of native compiles, and a stronger claim — the run that
+instead of a run of native compiles, and a stronger claim — the run that
 actually gated `main`, not a fresh one on a re-resolved dependency tree.
 
 ## Configuration this repo does not own
@@ -137,10 +136,9 @@ rule, both must agree:
 - `orchestration/config-overrides/production.json` ← the one the running
   container actually reads
 
-Both should read `ghcr.io/crit-fumble/cfg-server-disrecord:latest`, and both do
-today — **so a normal release changes neither file.** A version pinned here is
-an incident tool (freeze the fleet on a known-good build), not part of shipping;
-core-server only rolls `:latest` forward at spawn when the value *is* `:latest`.
+Both name `ghcr.io/crit-fumble/cfg-server-disrecord` — **so a normal release
+changes neither file.** A digest pinned here (`…@sha256:<digest>`) is an incident
+tool (freeze the fleet on a known-good build), not part of shipping.
 
 ## Rollback
 
@@ -149,8 +147,9 @@ re-publishing, not reverting a config value:
 
 1. Find the good build's tag on the [package
    page](https://github.com/orgs/Crit-Fumble/packages/container/package/cfg-server-disrecord).
-2. Re-point `:latest` at it (run anywhere with registry access — the prod host
-   picks it up at the next spawn, no host command):
+2. Re-point `:latest` at it (run anywhere with registry access). It reaches only
+   a server with no release picked yet; one already on the bad release keeps it
+   until its host picks another:
 
 ```sh
 docker pull   ghcr.io/crit-fumble/cfg-server-disrecord:<good-tag>

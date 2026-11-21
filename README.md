@@ -7,11 +7,9 @@ hands DisRecord its token so DisRecord can join voice on the bot's behalf.
 
 The container has **no slash-command surface**. It is driven entirely by an
 HTTP control API. If you want slash commands, build your own bot that drives
-this container — **ReSesh** (web app and Discord Activity in `cfg-app-resesh`;
-slash-command dispatch and container lifecycle in `cfg-core-server`) is the
-reference implementation.
+this container.
 
-> ℹ️ **Those CFG repos are private.** They are named for orientation throughout this README,
+> ℹ️ **The CFG repos this README names are private.** They are named for orientation,
 > not as links you can open. **Nothing here depends on them** — the self-hosted mode below is
 > the whole product, and every phone-home path is a clean no-op when the CFG env vars are
 > absent.
@@ -83,6 +81,7 @@ You need a Discord bot and (optionally) a Deepgram API key.
 4. **Run the container** (`serve` is the default `CMD`):
 
    ```sh
+   docker build -t cfg-server-disrecord:local .
    docker run -d --name disrecord \
      --env-file .env \
      -p 127.0.0.1:8080:8080 \
@@ -121,8 +120,7 @@ You need a Discord bot and (optionally) a Deepgram API key.
    `POST /v1/recordings` joins the voice channel, posts the in-Discord
    consent prompt, and begins capture. When you stop, the container mixes the
    MP3, generates a VTT caption track (when transcription is on), posts them
-   into a thread, and writes a copy to `OUTPUT_DIR/<recordingId>/`. Want a
-   `/resesh`-style slash UX? Build a bot that issues these control calls.
+   into a thread, and writes a copy to `OUTPUT_DIR/<recordingId>/`.
 
 ### Remembered consent
 
@@ -276,11 +274,11 @@ session.
 left verbatim, so a typo shows up in the title instead of vanishing. Unset keeps
 the built-in `<voice channel> - <date> - <kind>`.
 
-⚠️ **Only those three are read by the recording path today** — `keywords`,
-`keyterms` and `threadNameTemplate`. `transcriptionEnabled`, `deepgramModel`,
+⚠️ **Only `keywords`, `keyterms` and `threadNameTemplate` are read by the
+recording path.** `transcriptionEnabled`, `deepgramModel`,
 `deepgramLanguage`, `outputChannelId` and `outputThreadId` are accepted,
 validated and stored faithfully, and a scene read returns them, but nothing
-consumes them yet: setting `transcriptionEnabled: false` does **not** turn
+consumes them: setting `transcriptionEnabled: false` does **not** turn
 transcription off. Use the per-recording `transcription` flag on
 `POST /v1/recordings` (the dashboard's checkbox) for that.
 
@@ -324,15 +322,4 @@ local-only is decided purely by whether `CORE_SERVER_URL` is set; see
 
 ## Development
 
-```sh
-npm install
-npm run dev          # tsx watch — serve mode
-npm test
-npm run typecheck
-npm run build
-```
-
-`@discordjs/opus` ships a native binding. Local installs may need
-`npm rebuild @discordjs/opus`; unit tests mock it so they run without it.
-
-Pre-push hook runs the full test suite (cfg-* convention). No `--no-verify`.
+Building, running and testing from source: [CONTRIBUTING.md](CONTRIBUTING.md).
