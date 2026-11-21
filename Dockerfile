@@ -19,7 +19,7 @@
 # may need to compile @discordjs/opus from source via the toolchain in deps.
 
 # Pinned by digest: the tag is rebuilt in place with a new Node patch and CA store. Dependabot's docker ecosystem bumps it.
-FROM node:24-slim@sha256:01d566e8d94d8c619591d78652babfccd3c6992a3dffa9ed5ab39e11cf6c70e9 AS base
+FROM node:24-slim@sha256:dc26ae92c9fb15cf6b1d63e20f0944b2efe0f115b20e00be48fb23fceb061c54 AS base
 WORKDIR /app
 
 # ── Stage 1: deps ────────────────────────────────────────────────────────────
