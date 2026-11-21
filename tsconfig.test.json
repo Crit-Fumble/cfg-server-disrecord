@@ -1,6 +1,6 @@
 // tests/ is excluded from the emit build (it must never reach dist/ — this ships
 // as a production image), so that project never typechecks it. This project
-// covers the test suites; `npm run typecheck` runs all three.
+// covers the test suites; `npm run typecheck` runs both.
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
