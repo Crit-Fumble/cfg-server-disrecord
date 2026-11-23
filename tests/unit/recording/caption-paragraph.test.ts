@@ -8,7 +8,7 @@
  * scroll back through.
  *
  * A paragraph stays open for a speaker and closes on: another speaker posting,
- * a long silence, or approaching the 2000-char cap.
+ * a long silence, approaching the 2000-char cap, or a pause.
  *
  * VTT/caption timing is deliberately NOT under test here — it must remain
  * per-utterance, and lives on a separate path (`captions[]` / postTranscript).
@@ -227,5 +227,37 @@ describe('paragraph close conditions', () => {
     } finally {
       jest.useRealTimers()
     }
+  })
+})
+
+describe('a pause closes every open paragraph', () => {
+  it('starts a new message for speech after Resume', async () => {
+    const { controller, posts, edits } = await makeController()
+
+    priv(controller).postFinalCaption(finalEvent('gm', 'We pick up at the gate.'))
+    await drain(controller)
+    controller.pause()
+    controller.resume()
+    priv(controller).postFinalCaption(finalEvent('gm', 'The guard turns.'))
+    await drain(controller)
+
+    expect(posts).toEqual(['We pick up at the gate.', 'The guard turns.'])
+    expect(edits).toHaveLength(0)
+  })
+
+  it('settles a caption already in flight in the old message', async () => {
+    const { controller, posts, edits } = await makeController()
+
+    priv(controller).postFinalCaption(finalEvent('gm', 'The door creaks open.'))
+    await drain(controller)
+    // Queued but not yet run when the pause lands.
+    priv(controller).postFinalCaption(finalEvent('gm', 'Inside, torchlight flickers.'))
+    controller.pause()
+    controller.resume()
+    priv(controller).postFinalCaption(finalEvent('gm', 'A figure stirs.'))
+    await drain(controller)
+
+    expect(posts).toEqual(['The door creaks open.', 'A figure stirs.'])
+    expect(edits).toEqual([{ id: 'msg-1', content: 'The door creaks open. Inside, torchlight flickers.' }])
   })
 })
