@@ -8,7 +8,7 @@
  *
  * Lifecycle:
  *   start()  → mkdir temp → join voice (capture ASAP) → create thread + wire consent surface
- *   pause()  → gate audio + transcription
+ *   pause()  → gate audio + transcription, close each speaker's open caption paragraph
  *   resume() → un-gate
  *   stop()   → leave voice → finalize PCM → mix → VTT → sink → post thread → report home
  *
