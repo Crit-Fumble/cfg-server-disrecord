@@ -8,7 +8,7 @@
  *
  * Lifecycle:
  *   start()  → mkdir temp → join voice (capture ASAP) → create thread + wire consent surface
- *   pause()  → gate audio + transcription
+ *   pause()  → gate audio + transcription, close each speaker's open caption paragraph
  *   resume() → un-gate
  *   stop()   → leave voice → finalize PCM → mix → VTT → sink → post thread → report home
  *
@@ -774,6 +774,7 @@ export class SessionController {
     this.session.setPaused(true)
     // Flush the in-progress chunk so paused players can hear up to the break.
     void this.chunkRecorder?.onPause()
+    this.closeOpenParagraphs()
     this.logger.info({ recordingId: this.recordingId }, 'recording paused')
   }
 
@@ -1667,6 +1668,21 @@ export class SessionController {
       }
       await this.openParagraphWith(event.speakerId, event.speakerName, text, text)
     })
+  }
+
+  /**
+   * End every speaker's open paragraph, so the first words after a Resume start
+   * a new message. The close is queued behind each speaker's pending ops: a
+   * caption already in flight when the pause came settles in the old message.
+   */
+  private closeOpenParagraphs(): void {
+    for (const speakerId of this.speakerOpQueue.keys()) {
+      this.enqueueSpeakerOp(speakerId, async () => {
+        this.openParagraphs.delete(speakerId)
+        this.interimLastEditAt.delete(speakerId)
+        this.interimLastText.delete(speakerId)
+      })
+    }
   }
 
   /**
